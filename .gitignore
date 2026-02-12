@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Test data files (keep only READMEs)
+data/**
+!data/
+!data/*/
+!data/**/README.md
