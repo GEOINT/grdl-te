@@ -26,14 +26,6 @@ One file is sufficient for testing:
 4. Download: Standalone band `T*_B04_10m.jp2` OR full SAFE archive
 5. If SAFE: Extract `GRANULE/*/IMG_DATA/R10m/*_B04_10m.jp2`
 
-### Option 2: ESA Scihub Archive
-
-1. Visit: https://scihub.copernicus.eu/dhus/#/home
-2. Register (free)
-3. Search: "Sentinel-2"
-4. Download SAFE archive
-5. Extract: `S2*.SAFE/GRANULE/*/IMG_DATA/R10m/*_B04_10m.jp2`
-
 ## File Structure
 
 ### Standalone JP2
@@ -43,12 +35,12 @@ T10SEG_20240115T184719_B04_10m.jp2
 
 ### Within SAFE Archive
 ```
-S2A_MSIL2A_20240115T184719_N0510_R070_T10SEG_20240115T201234.SAFE/
+S2B_MSIL2A_20260204T170409_N0512_R069_T15RTP_20260204T223135.SAFE/
 └── GRANULE/
-    └── L2A_T10SEG_A044567_20240115T184719/
+    └── L2A_T15RTP_A046570_20260204T171339/
         └── IMG_DATA/
             └── R10m/
-                └── T10SEG_20240115T184719_B04_10m.jp2  ← Use this
+                └── T15RTP_20260204T170409_B04_10m.jp2  ← Use this
 ```
 
 ## File Properties

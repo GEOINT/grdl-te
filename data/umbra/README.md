@@ -73,7 +73,6 @@ Access via SICDReader: `from grdl.IO import SICDReader`
 - **License**: CC BY 4.0 (attribution required)
 - **File naming**: Varies by collection, typically `UMBRA_[DATE]_[LOCATION]_[MODE].nitf`
 - **Geometry**: Slant-plane requires geolocation model for ground projection
-- **Future**: CPHD (raw phase history) files when available
 
 ## Data Attribution
 

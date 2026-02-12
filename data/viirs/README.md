@@ -25,14 +25,6 @@ One file is sufficient for testing:
 3. Search: Product "VNP09GA", Collection 2, any recent date
 4. Download single granule HDF5 file
 
-### Option 2: NASA Earthdata Search
-
-1. Visit: https://search.earthdata.nasa.gov
-2. Login with Earthdata credentials
-3. Search: "VNP09GA"
-4. Filter: Collection 2, any location
-5. Download any granule
-
 ## File Structure
 
 Typical VIIRS HDF5 hierarchy:
