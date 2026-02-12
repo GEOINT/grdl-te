@@ -18,10 +18,7 @@ grdl
 
 Author
 ------
-Duane Smalley
-duane.d.smalley@gmail.com
-
-Steven Siebert
+Ava Courtney
 
 License
 -------

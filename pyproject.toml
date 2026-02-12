@@ -49,6 +49,7 @@ markers = [
     "viirs: VIIRS VNP09GA tests (HDF5Reader)",
     "sentinel2: Sentinel-2 tests (JP2Reader)",
     "nitf: Umbra SICD tests (NITFReader)",
+    "geolocation: Geolocation utility and coordinate transform tests",
 ]
 
 [tool.coverage.run]
