@@ -20,6 +20,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+benchmarking = [
+    "grdl-runtime",
+]
 dev = [
     "pytest-benchmark>=4.0",
     "pytest-xdist>=3.0",  # parallel test execution
@@ -50,10 +53,14 @@ markers = [
     "sentinel2: Sentinel-2 tests (JP2Reader)",
     "nitf: Umbra SICD tests (NITFReader)",
     "geolocation: Geolocation utility and coordinate transform tests",
+    "benchmark: Performance benchmark tests",
 ]
 
+[tool.setuptools.packages.find]
+include = ["grdl_te*"]
+
 [tool.coverage.run]
-source = ["tests"]
+source = ["tests", "grdl_te"]
 omit = ["*/test_*.py"]
 
 [tool.coverage.report]

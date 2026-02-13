@@ -1,6 +1,9 @@
-# GRDL-TE: High-Fidelity Evaluation Suite
+# GRDL-TE: Testing, Evaluation & Benchmarking
 
-Validates GRDL IO readers against real-world remote sensing data from operational satellite platforms. Every test evaluates a specific transformation, extraction, or integration -- if data is present it must pass; if data is missing it skips with a clear message.
+GRDL-TE serves two purposes:
+
+1. **Validation** — tests GRDL's public API against real-world satellite data with 3-level validation (format, quality, integration).
+2. **Benchmarking** — profiles GRDL workflows and individual components, aggregates metrics across runs, and persists results for regression detection and cross-hardware comparison.
 
 ## Design Principles
 
@@ -15,6 +18,13 @@ Validates GRDL IO readers against real-world remote sensing data from operationa
 
 ```
 grdl-te/
+├── grdl_te/                     # Benchmarking package (pip install -e .)
+│   └── benchmarking/
+│       ├── models.py            # HardwareSnapshot, AggregatedMetrics, BenchmarkRecord
+│       ├── base.py              # BenchmarkRunner, BenchmarkStore ABCs
+│       ├── store.py             # JSONBenchmarkStore (file-per-record persistence)
+│       ├── active.py            # ActiveBenchmarkRunner (workflow N-run aggregation)
+│       └── component.py         # ComponentBenchmark (single-function profiling)
 ├── data/                        # Real-world data files (not committed to git)
 │   ├── README.md                # Data strategy documentation
 │   ├── landsat/                 # Landsat 8/9 COG (GeoTIFFReader)
@@ -27,10 +37,14 @@ grdl-te/
 │       └── README.md
 ├── tests/
 │   ├── conftest.py              # Shared fixtures + graceful skip logic
-│   ├── test_io_geotiff.py       # GeoTIFFReader (Landsat) -- 15 tests
-│   ├── test_io_hdf5.py          # HDF5Reader (VIIRS) -- 15 tests
-│   ├── test_io_jpeg2000.py      # JP2Reader (Sentinel-2) -- 16 tests
-│   └── test_io_nitf.py          # NITFReader (Umbra SICD) -- 15 tests
+│   ├── test_io_geotiff.py       # GeoTIFFReader (Landsat)
+│   ├── test_io_hdf5.py          # HDF5Reader (VIIRS)
+│   ├── test_io_jpeg2000.py      # JP2Reader (Sentinel-2)
+│   ├── test_io_nitf.py          # NITFReader (Umbra SICD)
+│   ├── test_benchmark_models.py # Benchmark dataclass tests
+│   ├── test_benchmark_store.py  # JSON store tests
+│   ├── test_active_runner.py    # Active benchmark runner tests
+│   └── test_component_benchmark.py # Component benchmark tests
 ├── pyproject.toml               # Package configuration + markers
 ├── LICENSE                      # MIT License
 └── README.md                    # This file
@@ -98,6 +112,94 @@ Source: [Umbra Open Data (S3)](https://umbra-open-data-catalog.s3.amazonaws.com/
 
 Each `data/<dataset>/README.md` contains detailed download instructions and file format specifications.
 
+## Benchmarking
+
+The `grdl_te` package provides infrastructure for profiling GRDL workflows and individual components. It consumes grdl-runtime types (`Workflow`, `WorkflowResult`, `StepMetrics`) directly.
+
+### Installation
+
+```bash
+pip install -e .                          # core (models, store, component benchmarks)
+pip install -e ".[benchmarking]"          # + grdl-runtime (active workflow benchmarks)
+```
+
+### Active Workflow Benchmarking
+
+Run a grdl-runtime `Workflow` N times, aggregate per-step metrics, and persist results:
+
+```python
+from grdl_rt import Workflow
+from grdl_te.benchmarking import ActiveBenchmarkRunner, JSONBenchmarkStore
+
+wf = (
+    Workflow("SAR Pipeline", modalities=["SAR"])
+    .reader(SICDReader)
+    .step(SublookDecomposition, num_looks=3)
+    .step(ToDecibels)
+)
+
+store = JSONBenchmarkStore()
+runner = ActiveBenchmarkRunner(wf, iterations=10, warmup=2, store=store)
+record = runner.run(source="image.nitf", prefer_gpu=True)
+
+# record.total_wall_time.mean, .stddev, .p95
+# record.step_results[0].wall_time_s.mean
+# record.hardware.cpu_count, .gpu_devices
+```
+
+### Component Benchmarking
+
+Profile individual GRDL functions outside of a workflow context:
+
+```python
+from grdl.data_prep import Normalizer
+from grdl_te.benchmarking import ComponentBenchmark
+
+image = np.random.rand(4096, 4096).astype(np.float32)
+norm = Normalizer(method='minmax')
+
+bench = ComponentBenchmark(
+    name="Normalizer.minmax.4k",
+    fn=norm.normalize,
+    setup=lambda: ((image,), {}),
+    iterations=20,
+    warmup=3,
+)
+record = bench.run()
+```
+
+### Result Storage
+
+Results are stored as JSON files in `.benchmarks/`:
+
+```
+.benchmarks/
+  index.json              # lightweight index for fast filtering
+  records/
+    <uuid>.json           # full BenchmarkRecord per run
+```
+
+Each record captures hardware state (`HardwareSnapshot`), per-step timing/memory aggregations (`StepBenchmarkResult`), and raw per-iteration metrics for lossless analysis.
+
+### Key Types
+
+| Type | Purpose |
+|------|---------|
+| `HardwareSnapshot` | Frozen machine state (CPU, RAM, GPU, platform) at benchmark time |
+| `AggregatedMetrics` | Statistics (min, max, mean, median, stddev, p95) across N runs |
+| `StepBenchmarkResult` | Per-step aggregated wall time, CPU time, memory, GPU usage |
+| `BenchmarkRecord` | Complete benchmark result — the atomic unit of persistence |
+| `ActiveBenchmarkRunner` | Runs a Workflow N times with warmup and aggregates metrics |
+| `ComponentBenchmark` | Profiles a single callable with timing and tracemalloc |
+| `JSONBenchmarkStore` | File-per-record JSON persistence with index |
+
+### Future Phases
+
+- **Passive Monitoring** — `ExecutionHook` that captures metrics from production workflows
+- **Forensic Analysis** — load a completed workflow result, substitute step metrics to simulate "what if" scenarios (e.g., GPU vs CPU)
+- **Comparison & Regression Detection** — compare benchmark records across runs with configurable thresholds
+- **Cross-Hardware Prediction** — collect results from different machines, predict performance on new hardware
+
 ## Running Tests
 
 ```bash
@@ -121,6 +223,10 @@ pytest tests/ -m "nitf and not slow"    # NITF tests, skip slow ones
 
 # Skip all data-dependent tests
 pytest tests/ -m "not requires_data"
+
+# Run benchmarking tests
+pytest tests/test_benchmark_models.py tests/test_benchmark_store.py -v
+pytest tests/test_active_runner.py tests/test_component_benchmark.py -v
 ```
 
 ### Expected Output
@@ -154,6 +260,7 @@ Each skip message points to the exact file pattern and README with download inst
 | `requires_data` | Test requires real data files in `data/` |
 | `slow` | Long-running test (large file reads, full pipelines) |
 | `integration` | Level 3 tests (ChipExtractor, Normalizer, Tiler workflows) |
+| `benchmark` | Performance benchmark tests |
 
 ## Adding a New Reader Test
 
