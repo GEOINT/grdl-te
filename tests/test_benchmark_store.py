@@ -7,7 +7,7 @@ rebuild using temporary directories.
 
 Author
 ------
-Steven Siebert
+Ava Courtney
 
 License
 -------

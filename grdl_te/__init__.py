@@ -11,7 +11,7 @@ numpy
 
 Author
 ------
-Steven Siebert
+Ava Courtney
 
 License
 -------

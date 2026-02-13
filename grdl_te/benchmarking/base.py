@@ -9,7 +9,7 @@ or storage strategies.
 
 Author
 ------
-Steven Siebert
+Ava Courtney
 
 License
 -------

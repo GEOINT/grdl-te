@@ -1,0 +1,136 @@
+schema_version: "2.0"
+name: "GRDL Comprehensive Benchmark"
+version: "1.0.0"
+description: >-
+  Exercises every available image processing component in GRDL.
+  Accepts a complex SAR chip as input and fans out into parallel
+  branches that cover speckle filtering, phase analysis, rank
+  filters, linear filters, statistical texture, intensity
+  transforms, and contrast stretching.
+
+state: "draft"
+
+tags:
+  modalities: [SAR]
+  niirs_range: [3.0, 6.0]
+  day_capable: true
+  night_capable: true
+  detection_types: []
+  segmentation_types: []
+
+steps:
+  # ── Stage 1: Complex-domain speckle filter ─────────────────────────────
+  - processor: grdl.image_processing.filters.ComplexLeeFilter
+    version: "2.0.0"
+    id: despeckle
+    phase: global_processing
+    params:
+      kernel_size: 7
+
+  # ── Stage 2a: Phase gradient analysis (fan-out from despeckled) ────────
+  - processor: grdl.image_processing.filters.PhaseGradientFilter
+    version: "1.0.0"
+    id: grad_row
+    depends_on: [despeckle]
+    phase: global_processing
+    params:
+      kernel_size: 5
+      direction: row
+
+  - processor: grdl.image_processing.filters.PhaseGradientFilter
+    version: "1.0.0"
+    id: grad_col
+    depends_on: [despeckle]
+    phase: global_processing
+    params:
+      kernel_size: 5
+      direction: col
+
+  - processor: grdl.image_processing.filters.PhaseGradientFilter
+    version: "1.0.0"
+    id: grad_mag
+    depends_on: [despeckle]
+    phase: global_processing
+    params:
+      kernel_size: 5
+      direction: magnitude
+
+  # ── Stage 2b: Amplitude conversion ─────────────────────────────────────
+  - processor: grdl.image_processing.intensity.ToDecibels
+    version: "1.0.0"
+    id: to_db
+    depends_on: [despeckle]
+    phase: global_processing
+    params:
+      floor_db: -60.0
+
+  # ── Stage 3: Real-valued speckle filter on dB output ───────────────────
+  - processor: grdl.image_processing.filters.LeeFilter
+    version: "1.0.0"
+    id: lee_real
+    depends_on: [to_db]
+    phase: global_processing
+    params:
+      kernel_size: 7
+
+  # ── Stage 3: Linear filters on dB output ───────────────────────────────
+  - processor: grdl.image_processing.filters.MeanFilter
+    version: "1.0.0"
+    id: mean_filter
+    depends_on: [to_db]
+    phase: global_processing
+    params:
+      kernel_size: 5
+
+  - processor: grdl.image_processing.filters.GaussianFilter
+    version: "1.0.0"
+    id: gaussian_filter
+    depends_on: [to_db]
+    phase: global_processing
+    params:
+      sigma: 1.5
+      truncate: 4.0
+
+  # ── Stage 3: Rank filters on dB output ─────────────────────────────────
+  - processor: grdl.image_processing.filters.MedianFilter
+    version: "1.0.0"
+    id: median_filter
+    depends_on: [to_db]
+    phase: global_processing
+    params:
+      kernel_size: 5
+
+  - processor: grdl.image_processing.filters.MinFilter
+    version: "1.0.0"
+    id: min_filter
+    depends_on: [to_db]
+    phase: global_processing
+    params:
+      kernel_size: 3
+
+  - processor: grdl.image_processing.filters.MaxFilter
+    version: "1.0.0"
+    id: max_filter
+    depends_on: [to_db]
+    phase: global_processing
+    params:
+      kernel_size: 3
+
+  # ── Stage 3: Statistical texture on dB output ──────────────────────────
+  - processor: grdl.image_processing.filters.StdDevFilter
+    version: "1.0.0"
+    id: texture
+    depends_on: [to_db]
+    phase: global_processing
+    params:
+      kernel_size: 5
+
+  # ── Stage 4: Contrast stretch (finalization) ───────────────────────────
+  - processor: grdl.image_processing.intensity.PercentileStretch
+    version: "1.0.0"
+    id: percentile_stretch
+    depends_on: [to_db]
+    phase: finalization
+    params:
+      plow: 2.0
+      phigh: 98.0

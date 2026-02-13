@@ -11,7 +11,7 @@ Does NOT require grdl-runtime — works with pure Python callables.
 
 Author
 ------
-Steven Siebert
+Ava Courtney
 
 License
 -------

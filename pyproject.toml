@@ -8,6 +8,7 @@ license = {text = "MIT"}
 authors = [
     {name = "Duane Smalley", email = "duane.d.smalley@gmail.com"},
     {name = "Steven Siebert"},
+    {name = "Ava Courtney"},
 ]
 
 dependencies = [

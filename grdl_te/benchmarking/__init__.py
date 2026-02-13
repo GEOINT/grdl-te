@@ -8,7 +8,7 @@ benchmarking, component-level profiling, and JSON file persistence.
 
 Author
 ------
-Steven Siebert
+Ava Courtney
 
 License
 -------
@@ -33,6 +33,7 @@ from grdl_te.benchmarking.models import (
 from grdl_te.benchmarking.base import BenchmarkRunner, BenchmarkStore
 from grdl_te.benchmarking.store import JSONBenchmarkStore
 from grdl_te.benchmarking.component import ComponentBenchmark, as_pytest_benchmark
+from grdl_te.benchmarking.suite import run_suite
 
 __all__ = [
     "ActiveBenchmarkRunner",
@@ -45,6 +46,7 @@ __all__ = [
     "JSONBenchmarkStore",
     "StepBenchmarkResult",
     "as_pytest_benchmark",
+    "run_suite",
 ]
 
 

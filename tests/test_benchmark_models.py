@@ -8,7 +8,7 @@ and ``BenchmarkRecord``.
 
 Author
 ------
-Steven Siebert
+Ava Courtney
 
 License
 -------

@@ -15,7 +15,7 @@ Storage layout::
 
 Author
 ------
-Steven Siebert
+Ava Courtney
 
 License
 -------
