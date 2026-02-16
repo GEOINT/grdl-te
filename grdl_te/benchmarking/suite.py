@@ -958,9 +958,11 @@ def run_geolocation_benchmarks(
         print(f"  SKIP  GCPGeolocation benchmarks ({exc})")
 
     # --- SICDGeolocation (requires real SICD data) ---
-    sar_path = Path("grdl-te/data/umbra/"
-                    "2025-10-25-20-00-44_UMBRA-10_SICD.nitf")
-    if sar_path.exists():
+    sar_path = _find_data_file(
+        Path(__file__).resolve().parents[2] / "data" / "umbra",
+        "*SICD*.nitf",
+    )
+    if sar_path is not None:
         try:
             from grdl.IO.sar import SICDReader
             from grdl.geolocation import SICDGeolocation
@@ -1005,8 +1007,8 @@ def run_geolocation_benchmarks(
         lon_arr = np.random.uniform(-119.0, -117.0, size=10000)
 
         r = _bench(
-            "ConstantElevation.get_height.batch10000",
-            elev.get_height,
+            "ConstantElevation.get_elevation.batch10000",
+            elev.get_elevation,
             setup=lambda: ((lat_arr, lon_arr), {}), **kw,
         )
         if r:
@@ -1177,9 +1179,11 @@ def run_sar_processing_benchmarks(
     results = []
     mod = "image_processing.sar"
 
-    sar_path = Path("grdl-te/data/umbra/"
-                    "2025-10-25-20-00-44_UMBRA-10_SICD.nitf")
-    if not sar_path.exists():
+    _data_dir = Path(__file__).resolve().parent.parent.parent / "data"
+    umbra_dir = _data_dir / "umbra"
+    sar_path = (_find_data_file(umbra_dir, "*.nitf")
+                or _find_data_file(umbra_dir, "*.ntf"))
+    if not sar_path:
         print("  SKIP  SublookDecomposition benchmarks (SICD data not found)")
         return results
 
@@ -1255,9 +1259,11 @@ def run_workflow_benchmark(
         print(f"  SKIP  YAML workflow not found: {YAML_PATH}")
         return None
 
-    sar_path = Path("grdl-te/data/umbra/"
-                    "2025-10-25-20-00-44_UMBRA-10_SICD.nitf")
-    if not sar_path.exists():
+    _data_dir = Path(__file__).resolve().parent.parent.parent / "data"
+    umbra_dir = _data_dir / "umbra"
+    sar_path = (_find_data_file(umbra_dir, "*.nitf")
+                or _find_data_file(umbra_dir, "*.ntf"))
+    if not sar_path:
         print("  SKIP  Workflow benchmark requires SICD data file")
         return None
 
