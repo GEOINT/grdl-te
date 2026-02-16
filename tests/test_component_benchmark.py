@@ -32,7 +32,7 @@ import numpy as np
 import pytest
 
 # Internal
-from grdl_te.benchmarking.component import ComponentBenchmark, as_pytest_benchmark
+from grdl_te.benchmarking.component import ComponentBenchmark
 from grdl_te.benchmarking.store import JSONBenchmarkStore
 
 

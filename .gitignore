@@ -211,3 +211,6 @@ data/**
 !data/
 !data/*/
 !data/**/README.md
+
+# Any .benchmark files
+.benchmarks/

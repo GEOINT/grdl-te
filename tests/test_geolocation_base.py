@@ -489,7 +489,7 @@ class TestAffineGeolocationUTM:
         footprint = geo_utm.get_footprint()
         assert footprint['type'] == 'Polygon'
 
-        _, min_lat, _, max_lat = footprint['bounds']
+        _, _, _, max_lat = footprint['bounds']
         assert max_lat < 0.0, "UTM 56S should produce negative latitudes"
 
 

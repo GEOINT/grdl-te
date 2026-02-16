@@ -35,7 +35,9 @@ Modified
 """
 
 # Standard library
+import contextlib
 import gc
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -117,6 +119,21 @@ def _section(title: str) -> None:
     print(f"\n{'=' * 72}")
     print(f"  {title}")
     print(f"{'=' * 72}")
+
+
+@contextlib.contextmanager
+def _suppress_stderr():
+    """Temporarily silence C-level stderr (e.g. GDAL TXTFMT warnings)."""
+    stderr_fd = 2
+    old_fd = os.dup(stderr_fd)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, stderr_fd)
+        os.close(devnull)
+        yield
+    finally:
+        os.dup2(old_fd, stderr_fd)
+        os.close(old_fd)
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +508,7 @@ def run_io_benchmarks(
 
     try:
         # --- NumpyWriter (always available) ---
-        from grdl.IO import NumpyWriter
+        from grdl.IO.numpy_io import NumpyWriter
 
         npy_path = tmpdir / "bench.npy"
         r = _bench(f"NumpyWriter.write.{sz}",
@@ -510,17 +527,21 @@ def run_io_benchmarks(
 
         # --- GeoTIFF (requires rasterio) ---
         try:
-            from grdl.IO import GeoTIFFReader, GeoTIFFWriter
+            from rasterio.transform import from_bounds
+            from grdl.IO.geotiff import GeoTIFFReader, GeoTIFFWriter
+
+            _geo = {"crs": "EPSG:4326",
+                    "transform": from_bounds(0, 0, 1, 1, cols, rows)}
 
             tif_path = tmpdir / "bench.tif"
             w = GeoTIFFWriter(tif_path)
-            w.write(real_img)
+            w.write(real_img, geolocation=_geo)
             w.close()
 
             tif_write_path = tmpdir / "bench_write.tif"
             r = _bench(f"GeoTIFFWriter.write.{sz}",
                         GeoTIFFWriter(tif_write_path).write,
-                        setup=lambda: ((real_img,), {}),
+                        setup=lambda: ((real_img,), {"geolocation": _geo}),
                         version="1.0.0", **kw)
             if r:
                 results.append(r)
@@ -555,7 +576,7 @@ def run_io_benchmarks(
 
         # --- HDF5 (requires h5py) ---
         try:
-            from grdl.IO import HDF5Reader, HDF5Writer
+            from grdl.IO.hdf5 import HDF5Reader, HDF5Writer
 
             h5_path = tmpdir / "bench.h5"
             w = HDF5Writer(h5_path)
@@ -563,9 +584,15 @@ def run_io_benchmarks(
             w.close()
 
             h5_write_path = tmpdir / "bench_write.h5"
-            r = _bench(f"HDF5Writer.write.{sz}",
-                        HDF5Writer(h5_write_path).write,
-                        setup=lambda: ((real_img,), {}),
+
+            def _hdf5_write():
+                if h5_write_path.exists():
+                    h5_write_path.unlink()
+                w = HDF5Writer(h5_write_path)
+                w.write(real_img)
+                w.close()
+
+            r = _bench(f"HDF5Writer.write.{sz}", _hdf5_write,
                         version="1.0.0", **kw)
             if r:
                 results.append(r)
@@ -600,7 +627,7 @@ def run_io_benchmarks(
 
         # --- PNG (requires Pillow or cv2) ---
         try:
-            from grdl.IO import PngWriter
+            from grdl.IO.png import PngWriter
 
             png_path = tmpdir / "bench.png"
             r = _bench(f"PngWriter.write.{sz}",
@@ -614,7 +641,7 @@ def run_io_benchmarks(
 
         # --- JPEG2000 (requires rasterio or glymur) ---
         try:
-            from grdl.IO import JP2Reader
+            from grdl.IO.jpeg2000 import JP2Reader
 
             try:
                 import rasterio
@@ -622,12 +649,13 @@ def run_io_benchmarks(
 
                 jp2_path = tmpdir / "bench.jp2"
                 transform = from_bounds(0, 0, 1, 1, cols, rows)
+                uint16_img = (real_img * 10000).astype(np.uint16)
                 with rasterio.open(
                     str(jp2_path), "w", driver="JP2OpenJPEG",
-                    height=rows, width=cols, count=1, dtype="float32",
+                    height=rows, width=cols, count=1, dtype="uint16",
                     transform=transform,
                 ) as dst:
-                    dst.write(real_img, 1)
+                    dst.write(uint16_img, 1)
 
                 def _jp2_read_full():
                     reader = JP2Reader(jp2_path)
@@ -656,6 +684,31 @@ def run_io_benchmarks(
     return results
 
 
+def _find_data_file(directory: Path, pattern: str) -> Optional[Path]:
+    """Find first file matching *pattern* in *directory*.
+
+    Returns ``None`` when the directory is missing or contains no matches.
+    """
+    if not directory.exists():
+        return None
+    matches = sorted(directory.glob(pattern))
+    return matches[0] if matches else None
+
+
+def _find_sentinel2_jp2(sentinel2_dir: Path) -> Optional[Path]:
+    """Locate a Sentinel-2 B04 JP2, standalone or inside a SAFE archive."""
+    # Standalone JP2
+    hit = _find_data_file(sentinel2_dir, "T*_B*.jp2")
+    if hit:
+        return hit
+    # Within SAFE structure (README pattern)
+    for safe in sorted(sentinel2_dir.glob("S2*.SAFE")):
+        jp2s = sorted(safe.glob("**/IMG_DATA/**/*_B04*.jp2"))
+        if jp2s:
+            return jp2s[0]
+    return None
+
+
 def _run_real_data_io(
     store: JSONBenchmarkStore,
     rows: int,
@@ -665,20 +718,33 @@ def _run_real_data_io(
     tags: Dict[str, str],
     results: List,
 ) -> None:
-    """Run IO benchmarks that require real data files."""
+    """Run IO benchmarks that require real data files.
+
+    Data directory is resolved relative to *this* file so benchmarks work
+    regardless of the caller's working directory.  Files are discovered by
+    glob patterns defined in the per-dataset README files rather than by
+    hard-coded filenames.
+    """
     mod = "IO"
     kw = dict(store=store, iterations=iterations, warmup=warmup,
               tags={**tags, "data": "real"}, module=mod)
 
-    # SICD
-    sar_path = Path("grdl-te/data/umbra/"
-                    "2025-10-25-20-00-44_UMBRA-10_SICD.nitf")
-    if sar_path.exists():
+    # Resolve data/ relative to the grdl-te package root:
+    #   suite.py -> benchmarking/ -> grdl_te/ -> grdl-te/ -> data/
+    _data_dir = Path(__file__).resolve().parent.parent.parent / "data"
+
+    # ------------------------------------------------------------------
+    # SICD  (umbra/  — pattern: *.nitf or *.ntf per README)
+    # ------------------------------------------------------------------
+    umbra_dir = _data_dir / "umbra"
+    sar_path = (_find_data_file(umbra_dir, "*.nitf")
+                or _find_data_file(umbra_dir, "*.ntf"))
+    if sar_path:
         try:
-            from grdl.IO import SICDReader
+            from grdl.IO.sar import SICDReader
 
             def _sicd_read_full():
-                with SICDReader(sar_path) as reader:
+                with _suppress_stderr(), SICDReader(sar_path) as reader:
                     return reader.read_full()
 
             r = _bench("SICDReader.read_full.real_data",
@@ -687,7 +753,7 @@ def _run_real_data_io(
                 results.append(r)
 
             def _sicd_read_chip():
-                with SICDReader(sar_path) as reader:
+                with _suppress_stderr(), SICDReader(sar_path) as reader:
                     s = reader.get_shape()
                     cx, cy = s[0] // 2, s[1] // 2
                     return reader.read_chip(cx - 512, cx + 512,
@@ -703,13 +769,15 @@ def _run_real_data_io(
     else:
         print("  SKIP  SICDReader benchmarks (data file not found)")
 
-    # VIIRS
-    viirs_paths = list(Path("grdl-te/data").glob("viirs/*.h5"))
-    if viirs_paths:
+    # ------------------------------------------------------------------
+    # VIIRS  (viirs/  — pattern: V?P09GA*.h5 per README)
+    # ------------------------------------------------------------------
+    viirs_dir = _data_dir / "viirs"
+    vpath = (_find_data_file(viirs_dir, "V?P09GA*.h5")
+             or _find_data_file(viirs_dir, "V?P09GA*.hdf5"))
+    if vpath:
         try:
-            from grdl.IO import VIIRSReader
-
-            vpath = viirs_paths[0]
+            from grdl.IO.multispectral import VIIRSReader
 
             def _viirs_read_full():
                 with VIIRSReader(vpath) as reader:
@@ -725,39 +793,42 @@ def _run_real_data_io(
     else:
         print("  SKIP  VIIRSReader benchmarks (data files not found)")
 
-    # ASTER
-    aster_paths = list(Path("grdl-te/data").glob("aster/*.hdf"))
-    if aster_paths:
+    # ------------------------------------------------------------------
+    # Sentinel-2 JP2  (sentinel2/  — pattern per README)
+    # ------------------------------------------------------------------
+    sentinel2_dir = _data_dir / "sentinel2"
+    jp2_path = _find_sentinel2_jp2(sentinel2_dir)
+    if jp2_path:
         try:
-            from grdl.IO import ASTERReader
+            from grdl.IO.jpeg2000 import JP2Reader
 
-            apath = aster_paths[0]
-
-            def _aster_read_full():
-                with ASTERReader(apath) as reader:
+            def _jp2_read_full():
+                with JP2Reader(jp2_path) as reader:
                     return reader.read_full()
 
-            r = _bench("ASTERReader.read_full.real_data",
-                        _aster_read_full, **kw)
+            r = _bench("JP2Reader.read_full.real_data",
+                        _jp2_read_full, **kw)
             if r:
                 results.append(r)
 
         except (ImportError, Exception) as exc:
-            print(f"  SKIP  ASTERReader benchmarks ({exc})")
+            print(f"  SKIP  JP2Reader benchmarks ({exc})")
     else:
-        print("  SKIP  ASTERReader benchmarks (data files not found)")
+        print("  SKIP  JP2Reader benchmarks (data files not found)")
 
-    # NITF
+    # ------------------------------------------------------------------
+    # NITF  (any *.nitf / *.ntf across data/ — pattern per README)
+    # ------------------------------------------------------------------
     try:
-        from grdl.IO import NITFReader
+        from grdl.IO.nitf import NITFReader
 
-        nitf_paths = (list(Path("grdl-te/data").glob("**/*.nitf"))
-                      + list(Path("grdl-te/data").glob("**/*.ntf")))
+        nitf_paths = (sorted(_data_dir.glob("**/*.nitf"))
+                      + sorted(_data_dir.glob("**/*.ntf")))
         if nitf_paths:
             npath = nitf_paths[0]
 
             def _nitf_read_full():
-                with NITFReader(npath) as reader:
+                with _suppress_stderr(), NITFReader(npath) as reader:
                     return reader.read_full()
 
             r = _bench("NITFReader.read_full.real_data",
@@ -891,7 +962,7 @@ def run_geolocation_benchmarks(
                     "2025-10-25-20-00-44_UMBRA-10_SICD.nitf")
     if sar_path.exists():
         try:
-            from grdl.IO import SICDReader
+            from grdl.IO.sar import SICDReader
             from grdl.geolocation import SICDGeolocation
 
             with SICDReader(sar_path) as reader:
@@ -1113,7 +1184,7 @@ def run_sar_processing_benchmarks(
         return results
 
     try:
-        from grdl.IO import SICDReader
+        from grdl.IO.sar import SICDReader
         from grdl.image_processing.sar import SublookDecomposition
 
         with SICDReader(sar_path) as reader:
@@ -1194,7 +1265,7 @@ def run_workflow_benchmark(
         from grdl_rt.api import load_workflow
         from grdl_te.benchmarking import ActiveBenchmarkRunner
 
-        from grdl.IO import SICDReader
+        from grdl.IO.sar import SICDReader
         from grdl.data_prep import ChipExtractor
 
         wf = load_workflow(str(YAML_PATH))

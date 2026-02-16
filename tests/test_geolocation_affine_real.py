@@ -36,15 +36,12 @@ Modified
 2026-02-12
 """
 
-# Standard library
-from pathlib import Path
 
 # Third-party
 import pytest
 import numpy as np
 
 try:
-    import rasterio
     _HAS_RASTERIO = True
 except ImportError:
     _HAS_RASTERIO = False

@@ -34,8 +34,6 @@ Modified
 2026-02-11
 """
 
-# Standard library
-from pathlib import Path
 
 # Third-party
 import pytest
