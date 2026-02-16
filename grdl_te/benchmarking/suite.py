@@ -924,7 +924,7 @@ def run_geolocation_benchmarks(
                 col = int(gj * (cols - 1) / 4)
                 lat = 34.0 + gi * 0.1
                 lon = -118.0 + gj * 0.1
-                gcps.append((row, col, lat, lon, 100.0))
+                gcps.append((lon, lat, 100.0, row, col))
 
         geo = GCPGeolocation(gcps=gcps, shape=(rows, cols))
 
