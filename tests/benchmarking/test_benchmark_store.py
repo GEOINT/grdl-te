@@ -173,9 +173,14 @@ class TestJSONBenchmarkStore:
         assert len(records) == 3
 
     def test_creates_directories(self, tmp_path):
-        """Store creates base_dir and records/ on init."""
+        """Store creates base_dir and records/ lazily on first save."""
         store_dir = tmp_path / "benchmarks" / "deep"
         store = JSONBenchmarkStore(base_dir=store_dir)
+
+        # No directories created until save() is called
+        assert not store_dir.exists()
+
+        store.save(_make_record())
 
         assert store_dir.exists()
         assert (store_dir / "records").exists()

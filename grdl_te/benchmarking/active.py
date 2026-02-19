@@ -25,12 +25,12 @@ Created
 
 Modified
 --------
-2026-02-13
+2026-02-18
 """
 
 # Standard library
 from collections import defaultdict
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional
 
 # Optional: grdl-runtime
 try:
@@ -48,6 +48,7 @@ from grdl_te.benchmarking.models import (
     HardwareSnapshot,
     StepBenchmarkResult,
 )
+from grdl_te.benchmarking.source import BenchmarkSource
 
 
 class ActiveBenchmarkRunner(BenchmarkRunner):
@@ -57,6 +58,11 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
     ----------
     workflow : Workflow
         The grdl-runtime ``Workflow`` to benchmark.
+    source : BenchmarkSource
+        Data source for the benchmark.  Use
+        ``BenchmarkSource.synthetic()``, ``.from_file()``, or
+        ``.from_array()`` to create one.  Data is resolved once
+        and reused across all warmup and measurement iterations.
     iterations : int
         Number of measurement iterations (excluding warmup).  Default 5.
     warmup : int
@@ -78,7 +84,7 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
     Examples
     --------
     >>> from grdl_rt import Workflow
-    >>> from grdl_te.benchmarking import ActiveBenchmarkRunner
+    >>> from grdl_te.benchmarking import ActiveBenchmarkRunner, BenchmarkSource
     >>>
     >>> wf = (
     ...     Workflow("SAR Pipeline", modalities=["SAR"])
@@ -86,13 +92,15 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
     ...     .step(SublookDecomposition, num_looks=3)
     ...     .step(ToDecibels)
     ... )
-    >>> runner = ActiveBenchmarkRunner(wf, iterations=10, warmup=2)
-    >>> record = runner.run(source="image.nitf", prefer_gpu=True)
+    >>> source = BenchmarkSource.synthetic("medium")
+    >>> runner = ActiveBenchmarkRunner(wf, source, iterations=10, warmup=2)
+    >>> record = runner.run(prefer_gpu=True)
     """
 
     def __init__(
         self,
         workflow: Any,
+        source: BenchmarkSource,
         iterations: int = 5,
         warmup: int = 1,
         store: Optional[BenchmarkStore] = None,
@@ -109,6 +117,7 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
             raise ValueError(f"warmup must be >= 0, got {warmup}")
 
         self._workflow = workflow
+        self._source = source
         self._iterations = iterations
         self._warmup = warmup
         self._store = store
@@ -121,9 +130,7 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
 
     def run(
         self,
-        source: Any = None,
         *,
-        prefer_gpu: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         **execute_kwargs: Any,
     ) -> BenchmarkRecord:
@@ -131,17 +138,13 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
 
         Parameters
         ----------
-        source : Any, optional
-            Passed to ``Workflow.execute()``.  Can be a filepath string,
-            ``np.ndarray``, or ``None`` (uses configured source).
-        prefer_gpu : bool
-            GPU preference forwarded to ``Workflow.execute()``.
         progress_callback : callable, optional
             Called with ``(current_iteration, total_iterations)`` after
             each measurement run.  Warmup iterations are not counted.
         **execute_kwargs
             Additional keyword arguments forwarded to
-            ``Workflow.execute()``.
+            ``Workflow.execute()`` (e.g. ``prefer_gpu``,
+            ``auto_tap_out``, ``metadata``).
 
         Returns
         -------
@@ -149,20 +152,21 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
             Aggregated benchmark results.
         """
         hardware = HardwareSnapshot.capture()
-        total = self._warmup + self._iterations
+
+        # Resolve source once — reused across all iterations
+        resolved = self._source.resolve()
 
         # Build execute arguments
-        exec_kwargs: Dict[str, Any] = {"prefer_gpu": prefer_gpu}
-        exec_kwargs.update(execute_kwargs)
+        exec_kwargs: Dict[str, Any] = dict(execute_kwargs)
 
         # Warmup
         for i in range(self._warmup):
-            self._workflow.execute(source, **exec_kwargs)
+            self._workflow.execute(resolved, **exec_kwargs)
 
         # Measurement runs
         all_workflow_metrics: List[Any] = []
         for i in range(self._iterations):
-            result = self._workflow.execute(source, **exec_kwargs)
+            result = self._workflow.execute(resolved, **exec_kwargs)
             all_workflow_metrics.append(result.metrics)
             if progress_callback is not None:
                 progress_callback(i + 1, self._iterations)

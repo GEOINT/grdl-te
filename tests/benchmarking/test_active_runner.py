@@ -25,7 +25,7 @@ Created
 
 Modified
 --------
-2026-02-13
+2026-02-18
 """
 
 # Standard library
@@ -52,6 +52,7 @@ pytestmark = pytest.mark.skipif(
 
 # Internal (only import after skip check is set)
 from grdl_te.benchmarking.active import ActiveBenchmarkRunner
+from grdl_te.benchmarking.source import BenchmarkSource
 from grdl_te.benchmarking.store import JSONBenchmarkStore
 
 
@@ -120,13 +121,17 @@ class _MockWorkflow:
         )
 
 
+# Reusable small source for tests that don't care about source details
+_SMALL_SOURCE = BenchmarkSource.synthetic("small")
+
+
 class TestActiveBenchmarkRunner:
     """Tests for ActiveBenchmarkRunner."""
 
     def test_correct_iteration_count(self):
         """Record reports correct iteration count."""
         wf = _MockWorkflow()
-        runner = ActiveBenchmarkRunner(wf, iterations=5, warmup=2)
+        runner = ActiveBenchmarkRunner(wf, _SMALL_SOURCE, iterations=5, warmup=2)
         record = runner.run()
 
         assert record.iterations == 5
@@ -135,7 +140,7 @@ class TestActiveBenchmarkRunner:
     def test_warmup_excluded(self):
         """Warmup runs execute but don't appear in results."""
         wf = _MockWorkflow()
-        runner = ActiveBenchmarkRunner(wf, iterations=3, warmup=2)
+        runner = ActiveBenchmarkRunner(wf, _SMALL_SOURCE, iterations=3, warmup=2)
         record = runner.run()
 
         # Total calls = warmup + iterations
@@ -147,7 +152,7 @@ class TestActiveBenchmarkRunner:
     def test_no_warmup(self):
         """Runner works with warmup=0."""
         wf = _MockWorkflow()
-        runner = ActiveBenchmarkRunner(wf, iterations=3, warmup=0)
+        runner = ActiveBenchmarkRunner(wf, _SMALL_SOURCE, iterations=3, warmup=0)
         record = runner.run()
 
         assert wf.execute_count == 3
@@ -156,7 +161,7 @@ class TestActiveBenchmarkRunner:
     def test_step_results_aggregated(self):
         """Per-step metrics are aggregated correctly."""
         wf = _MockWorkflow(n_steps=3)
-        runner = ActiveBenchmarkRunner(wf, iterations=5, warmup=0)
+        runner = ActiveBenchmarkRunner(wf, _SMALL_SOURCE, iterations=5, warmup=0)
         record = runner.run()
 
         assert len(record.step_results) == 3
@@ -168,7 +173,7 @@ class TestActiveBenchmarkRunner:
     def test_workflow_identity(self):
         """Record captures workflow name and version."""
         wf = _MockWorkflow(name="SAR Pipeline", version="2.1.0")
-        runner = ActiveBenchmarkRunner(wf, iterations=1, warmup=0)
+        runner = ActiveBenchmarkRunner(wf, _SMALL_SOURCE, iterations=1, warmup=0)
         record = runner.run()
 
         assert record.workflow_name == "SAR Pipeline"
@@ -177,7 +182,7 @@ class TestActiveBenchmarkRunner:
     def test_raw_metrics_stored(self):
         """Raw WorkflowMetrics dicts are preserved."""
         wf = _MockWorkflow()
-        runner = ActiveBenchmarkRunner(wf, iterations=3, warmup=0)
+        runner = ActiveBenchmarkRunner(wf, _SMALL_SOURCE, iterations=3, warmup=0)
         record = runner.run()
 
         assert len(record.raw_metrics) == 3
@@ -190,7 +195,7 @@ class TestActiveBenchmarkRunner:
         store = JSONBenchmarkStore(base_dir=tmp_path)
         wf = _MockWorkflow()
         runner = ActiveBenchmarkRunner(
-            wf, iterations=2, warmup=0, store=store
+            wf, _SMALL_SOURCE, iterations=2, warmup=0, store=store,
         )
         record = runner.run()
 
@@ -202,7 +207,7 @@ class TestActiveBenchmarkRunner:
         """User-defined tags are attached to the record."""
         wf = _MockWorkflow()
         runner = ActiveBenchmarkRunner(
-            wf, iterations=1, warmup=0,
+            wf, _SMALL_SOURCE, iterations=1, warmup=0,
             tags={"branch": "feature/x", "env": "ci"},
         )
         record = runner.run()
@@ -213,7 +218,7 @@ class TestActiveBenchmarkRunner:
         """Progress callback is called for each measurement iteration."""
         wf = _MockWorkflow()
         calls = []
-        runner = ActiveBenchmarkRunner(wf, iterations=3, warmup=1)
+        runner = ActiveBenchmarkRunner(wf, _SMALL_SOURCE, iterations=3, warmup=1)
         runner.run(progress_callback=lambda i, t: calls.append((i, t)))
 
         assert calls == [(1, 3), (2, 3), (3, 3)]
@@ -221,7 +226,7 @@ class TestActiveBenchmarkRunner:
     def test_hardware_snapshot_captured(self):
         """Record includes a valid hardware snapshot."""
         wf = _MockWorkflow()
-        runner = ActiveBenchmarkRunner(wf, iterations=1, warmup=0)
+        runner = ActiveBenchmarkRunner(wf, _SMALL_SOURCE, iterations=1, warmup=0)
         record = runner.run()
 
         assert record.hardware.cpu_count >= 1
@@ -231,18 +236,17 @@ class TestActiveBenchmarkRunner:
         """iterations < 1 raises ValueError."""
         wf = _MockWorkflow()
         with pytest.raises(ValueError, match="iterations"):
-            ActiveBenchmarkRunner(wf, iterations=0)
+            ActiveBenchmarkRunner(wf, _SMALL_SOURCE, iterations=0)
 
     def test_invalid_warmup_raises(self):
         """warmup < 0 raises ValueError."""
         wf = _MockWorkflow()
         with pytest.raises(ValueError, match="warmup"):
-            ActiveBenchmarkRunner(wf, warmup=-1)
+            ActiveBenchmarkRunner(wf, _SMALL_SOURCE, warmup=-1)
 
     def test_execute_kwargs_forwarded(self):
         """Extra kwargs are passed to workflow.execute()."""
         wf = _MockWorkflow()
-        # Replace execute to capture kwargs
         received_kwargs = {}
         original_execute = wf.execute
 
@@ -252,7 +256,48 @@ class TestActiveBenchmarkRunner:
 
         wf.execute = capturing_execute
 
-        runner = ActiveBenchmarkRunner(wf, iterations=1, warmup=0)
-        runner.run(source="test.nitf", prefer_gpu=True)
+        runner = ActiveBenchmarkRunner(wf, _SMALL_SOURCE, iterations=1, warmup=0)
+        runner.run(prefer_gpu=True)
 
         assert received_kwargs.get("prefer_gpu") is True
+
+    def test_source_resolved_once(self):
+        """Source is resolved once and reused across all iterations."""
+        wf = _MockWorkflow()
+        sources_seen = []
+        original_execute = wf.execute
+
+        def tracking_execute(source=None, **kwargs):
+            sources_seen.append(id(source))
+            return original_execute(source, **kwargs)
+
+        wf.execute = tracking_execute
+
+        src = BenchmarkSource.synthetic((32, 32))
+        runner = ActiveBenchmarkRunner(wf, src, iterations=3, warmup=2)
+        runner.run()
+
+        # All 5 calls (2 warmup + 3 measurement) should see the same object
+        assert len(sources_seen) == 5
+        assert len(set(sources_seen)) == 1
+
+    def test_from_array_source(self):
+        """Runner works with BenchmarkSource.from_array()."""
+        wf = _MockWorkflow()
+        arr = np.ones((16, 16), dtype=np.float32)
+        src = BenchmarkSource.from_array(arr)
+        runner = ActiveBenchmarkRunner(wf, src, iterations=1, warmup=0)
+        record = runner.run()
+
+        assert record.iterations == 1
+
+    def test_from_file_source(self, tmp_path):
+        """Runner works with BenchmarkSource.from_file()."""
+        f = tmp_path / "test.nitf"
+        f.write_bytes(b"\x00")
+        wf = _MockWorkflow()
+        src = BenchmarkSource.from_file(f)
+        runner = ActiveBenchmarkRunner(wf, src, iterations=1, warmup=0)
+        record = runner.run()
+
+        assert record.iterations == 1

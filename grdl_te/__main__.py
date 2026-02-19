@@ -66,6 +66,9 @@ Examples:
   python -m grdl_te --only filters intensity   # specific groups
   python -m grdl_te --skip-workflow             # component-only
   python -m grdl_te --store-dir ./results      # custom output dir
+  python -m grdl_te --report                   # print report to terminal
+  python -m grdl_te --report ./reports/        # save report to directory
+  python -m grdl_te --report ./my_report.txt   # save report to file
 """,
     )
     parser.add_argument(
@@ -92,6 +95,14 @@ Examples:
         "--only", nargs="+", choices=valid_groups, default=None,
         help="Run only specific benchmark groups",
     )
+    parser.add_argument(
+        "--report", nargs="?", const=True, default=None,
+        metavar="PATH",
+        help=(
+            "Generate a comprehensive report. Without a path, prints to "
+            "terminal. With a path, writes to the specified file or directory."
+        ),
+    )
     return parser
 
 
@@ -107,6 +118,15 @@ def main() -> None:
         only=args.only,
         skip_workflow=args.skip_workflow,
     )
+
+    if args.report is not None and results:
+        from grdl_te.benchmarking.report import print_report, save_report
+
+        if args.report is True:
+            print_report(results)
+        else:
+            output_path = save_report(results, Path(args.report))
+            print(f"\nReport saved to: {output_path}")
 
     sys.exit(0 if results else 1)
 

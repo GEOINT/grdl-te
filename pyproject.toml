@@ -33,7 +33,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/validation", "tests/benchmarking"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
@@ -54,6 +54,13 @@ markers = [
     "nitf: Umbra SICD tests (NITFReader)",
     "geolocation: Geolocation utility and coordinate transform tests",
     "benchmark: Performance benchmark tests",
+    "cfar: CFAR detector tests",
+    "detection: Detection model tests",
+    "decomposition: Polarimetric decomposition tests",
+    "sar: SAR-specific processing tests",
+    "image_formation: SAR image formation tests",
+    "ortho: Orthorectification tests",
+    "coregistration: CoRegistration tests",
 ]
 
 [tool.setuptools.packages.find]

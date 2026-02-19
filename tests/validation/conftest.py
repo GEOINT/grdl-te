@@ -35,7 +35,7 @@ import pytest
 
 
 # Data directory relative to repository root
-DATA_DIR = Path(__file__).parent.parent / "data"
+DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
 
 @pytest.fixture(scope="session")

@@ -29,12 +29,12 @@ Created
 
 Modified
 --------
-2026-02-13
+2026-02-18
 """
 
 # Standard library
 import json
-import os
+import logging
 import platform
 import socket
 import sys
@@ -45,6 +45,8 @@ from typing import Any, Dict, List, Optional
 
 # Third-party
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # Optional: grdl-runtime hardware context
 try:
@@ -102,17 +104,17 @@ class HardwareSnapshot:
         ----------
         hw : HardwareContext, optional
             Pre-existing hardware context.  If ``None``, creates a new
-            ``LocalHardwareContext`` (requires grdl-runtime) or falls
-            back to basic ``os`` queries.
+            ``LocalHardwareContext`` (requires grdl-runtime).  When
+            hardware detection is unavailable, all hardware fields are
+            zeroed out.
 
         Returns
         -------
         HardwareSnapshot
         """
         now = datetime.now(timezone.utc).isoformat()
-        # TODO This isnt necessary if runtime gets rid of total_mem vs total_memory bug 
-        fallback = {
-            "cpu_count": os.cpu_count() or 1,
+        empty = {
+            "cpu_count": 0,
             "total_memory_bytes": 0,
             "available_memory_bytes": 0,
             "gpu_available": False,
@@ -126,9 +128,22 @@ class HardwareSnapshot:
             try:
                 hw_dict = LocalHardwareContext().to_dict()
             except Exception:
-                hw_dict = fallback
+                logger.warning(
+                    "LocalHardwareContext() raised an exception; "
+                    "hardware fields will be zeroed. Install or "
+                    "update grdl-runtime, or pass a HardwareContext "
+                    "to capture(hw=...) to provide hardware info.",
+                    exc_info=True,
+                )
+                hw_dict = empty
         else:
-            hw_dict = fallback
+            logger.warning(
+                "grdl-runtime is not installed; hardware fields will "
+                "be zeroed. Install grdl-runtime or pass a "
+                "HardwareContext to capture(hw=...) to provide "
+                "hardware info.",
+            )
+            hw_dict = empty
 
         return cls(
             cpu_count=hw_dict["cpu_count"],

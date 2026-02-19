@@ -286,24 +286,35 @@ python -m grdl_te --store-dir ./results        # custom output directory
 | `medium` | 2048 x 2048 |
 | `large` | 4096 x 4096 |
 
-### Active Workflow Benchmarking
+### Active Workflow Benchmarking 
 
 Run a grdl-runtime `Workflow` N times, aggregate per-step metrics, and persist results:
 
 ```python
 from grdl_rt import Workflow
-from grdl_te.benchmarking import ActiveBenchmarkRunner, JSONBenchmarkStore
+from grdl_rt.api import load_workflow
+from grdl_te.benchmarking import ActiveBenchmarkRunner, BenchmarkSource, JSONBenchmarkStore
 
+store = JSONBenchmarkStore()
+
+# ==== Pass a declared wf ====
 wf = (
     Workflow("SAR Pipeline", modalities=["SAR"])
     .reader(SICDReader)
     .step(SublookDecomposition, num_looks=3)
     .step(ToDecibels)
 )
-
-store = JSONBenchmarkStore()
 runner = ActiveBenchmarkRunner(wf, iterations=10, warmup=2, store=store)
 record = runner.run(source="image.nitf", prefer_gpu=True)
+
+# ==== Load in a yaml workflow ====
+wf = load_workflow("path/to/my_workflow.yaml")
+source = BenchmarkSource.synthetic("medium")
+
+runner = ActiveBenchmarkRunner(
+    workflow=wf, source=source, iterations=5, warmup=1, store=store,
+)
+record = runner.run()
 
 # record.total_wall_time.mean, .stddev, .p95
 # record.step_results[0].wall_time_s.mean

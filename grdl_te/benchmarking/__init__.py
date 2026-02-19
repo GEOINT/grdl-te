@@ -21,7 +21,7 @@ Created
 
 Modified
 --------
-2026-02-13
+2026-02-18
 """
 
 from grdl_te.benchmarking.models import (
@@ -31,22 +31,29 @@ from grdl_te.benchmarking.models import (
     StepBenchmarkResult,
 )
 from grdl_te.benchmarking.base import BenchmarkRunner, BenchmarkStore
+from grdl_te.benchmarking.source import ARRAY_SIZES, BenchmarkSource
 from grdl_te.benchmarking.store import JSONBenchmarkStore
 from grdl_te.benchmarking.component import ComponentBenchmark, as_pytest_benchmark
+from grdl_te.benchmarking.report import format_report, print_report, save_report
 from grdl_te.benchmarking.suite import run_suite
 
 __all__ = [
+    "ARRAY_SIZES",
     "ActiveBenchmarkRunner",
     "AggregatedMetrics",
     "BenchmarkRecord",
     "BenchmarkRunner",
+    "BenchmarkSource",
     "BenchmarkStore",
     "ComponentBenchmark",
     "HardwareSnapshot",
     "JSONBenchmarkStore",
     "StepBenchmarkResult",
     "as_pytest_benchmark",
+    "format_report",
+    "print_report",
     "run_suite",
+    "save_report",
 ]
 
 

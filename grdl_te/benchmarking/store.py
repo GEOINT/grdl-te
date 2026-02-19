@@ -28,12 +28,11 @@ Created
 
 Modified
 --------
-2026-02-13
+2026-02-18
 """
 
 # Standard library
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -59,9 +58,10 @@ class JSONBenchmarkStore(BenchmarkStore):
         self._records_dir = self._base_dir / "records"
         self._index_path = self._base_dir / "index.json"
 
+    def _ensure_dirs(self) -> None:
+        """Create storage directories on first save."""
         self._base_dir.mkdir(parents=True, exist_ok=True)
         self._records_dir.mkdir(parents=True, exist_ok=True)
-
         if not self._index_path.exists():
             self._write_index([])
 
@@ -77,6 +77,7 @@ class JSONBenchmarkStore(BenchmarkStore):
         str
             The ``benchmark_id`` of the saved record.
         """
+        self._ensure_dirs()
         record_path = self._records_dir / f"{record.benchmark_id}.json"
         record_path.write_text(record.to_json(), encoding="utf-8")
 
@@ -203,6 +204,7 @@ class JSONBenchmarkStore(BenchmarkStore):
         int
             Number of records indexed.
         """
+        self._ensure_dirs()
         entries: List[Dict[str, Any]] = []
         for path in sorted(self._records_dir.glob("*.json")):
             try:

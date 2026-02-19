@@ -57,11 +57,7 @@ DEFAULT_ITERATIONS = 10
 DEFAULT_WARMUP = 2
 DEFAULT_SIZE = "medium"
 
-ARRAY_SIZES = {
-    "small": (512, 512),
-    "medium": (2048, 2048),
-    "large": (4096, 4096),
-}
+from grdl_te.benchmarking.source import ARRAY_SIZES
 
 YAML_PATH = Path(__file__).resolve().parents[2] / "workflows" / (
     "comprehensive_benchmark_workflow.yaml"
@@ -341,6 +337,169 @@ def run_decomposition_benchmarks(
                 setup=lambda: ((components,), {}), **kw)
     if r:
         results.append(r)
+
+    # --- DualPolHAlpha ---
+    try:
+        from grdl.image_processing.decomposition import DualPolHAlpha
+
+        rng = np.random.default_rng(42)
+        co_pol = (
+            rng.standard_normal((rows, cols))
+            + 1j * rng.standard_normal((rows, cols))
+        ).astype(np.complex64)
+        cross_pol = (
+            rng.standard_normal((rows, cols)) * 0.3
+            + 1j * rng.standard_normal((rows, cols)) * 0.3
+        ).astype(np.complex64)
+
+        for ws in (7, 11):
+            halpha = DualPolHAlpha(window_size=ws)
+            _co, _cross = co_pol, cross_pol  # capture for lambda
+            r = _bench(
+                f"DualPolHAlpha.decompose.w{ws}.{sz}", halpha.decompose,
+                setup=lambda _c=_co, _x=_cross: ((_c, _x), {}),
+                version="1.0.0", **kw,
+            )
+            if r:
+                results.append(r)
+
+        halpha = DualPolHAlpha(window_size=7)
+        ha_components = halpha.decompose(co_pol, cross_pol)
+        r = _bench(
+            f"DualPolHAlpha.to_rgb.{sz}", halpha.to_rgb,
+            setup=lambda: ((ha_components,), {}), version="1.0.0", **kw,
+        )
+        if r:
+            results.append(r)
+
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  DualPolHAlpha benchmarks ({exc})")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Detection benchmarks
+# ---------------------------------------------------------------------------
+def run_detection_benchmarks(
+    store: JSONBenchmarkStore,
+    rows: int,
+    cols: int,
+    iterations: int,
+    warmup: int,
+    tags: Dict[str, str],
+) -> List:
+    """Benchmark CFAR detectors and detection data models."""
+    _section("Detection — CFAR Detectors")
+    sz = tags["array_size"]
+    results = []
+    mod = "image_processing.detection"
+
+    kw = dict(store=store, iterations=iterations, warmup=warmup,
+              tags=tags, module=mod)
+
+    # Synthetic SAR-like magnitude image (Rayleigh-distributed)
+    rng = np.random.default_rng(42)
+    magnitude = np.abs(
+        rng.standard_normal((rows, cols))
+        + 1j * rng.standard_normal((rows, cols))
+    ).astype(np.float64)
+    # Convert to dB for CFAR
+    db_img = 20.0 * np.log10(magnitude + 1e-10)
+
+    # Inject 5 bright targets
+    peak = db_img.max()
+    for r_t, c_t in [(rows // 4, cols // 4), (rows // 2, cols // 2),
+                     (rows * 3 // 4, cols * 3 // 4),
+                     (rows // 4, cols * 3 // 4),
+                     (rows * 3 // 4, cols // 4)]:
+        db_img[r_t - 2:r_t + 3, c_t - 2:c_t + 3] = peak + 20.0
+
+    # --- CA-CFAR ---
+    try:
+        from grdl.image_processing.detection.cfar import CACFARDetector
+
+        for pfa in (1e-3, 1e-4):
+            det = CACFARDetector(guard_cells=3, training_cells=12, pfa=pfa)
+            _db = db_img
+            r = _bench(f"CACFARDetector.detect.pfa{pfa}.{sz}", det.detect,
+                       setup=lambda _d=_db: ((_d,), {}), version="1.0.0", **kw)
+            if r:
+                results.append(r)
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  CACFARDetector benchmarks ({exc})")
+
+    # --- GO-CFAR ---
+    try:
+        from grdl.image_processing.detection.cfar import GOCFARDetector
+
+        det = GOCFARDetector(guard_cells=3, training_cells=12, pfa=1e-3)
+        r = _bench(f"GOCFARDetector.detect.{sz}", det.detect,
+                   setup=lambda: ((db_img,), {}), version="1.0.0", **kw)
+        if r:
+            results.append(r)
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  GOCFARDetector benchmarks ({exc})")
+
+    # --- SO-CFAR ---
+    try:
+        from grdl.image_processing.detection.cfar import SOCFARDetector
+
+        det = SOCFARDetector(guard_cells=3, training_cells=12, pfa=1e-3)
+        r = _bench(f"SOCFARDetector.detect.{sz}", det.detect,
+                   setup=lambda: ((db_img,), {}), version="1.0.0", **kw)
+        if r:
+            results.append(r)
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  SOCFARDetector benchmarks ({exc})")
+
+    # --- OS-CFAR ---
+    try:
+        from grdl.image_processing.detection.cfar import OSCFARDetector
+
+        det = OSCFARDetector(guard_cells=3, training_cells=12, pfa=1e-3)
+        r = _bench(f"OSCFARDetector.detect.{sz}", det.detect,
+                   setup=lambda: ((db_img,), {}), version="1.0.0", **kw)
+        if r:
+            results.append(r)
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  OSCFARDetector benchmarks ({exc})")
+
+    # --- DetectionSet construction & serialization ---
+    try:
+        from shapely.geometry import Point
+
+        from grdl.image_processing.detection import Detection, DetectionSet
+
+        detections = [
+            Detection(
+                pixel_geometry=Point(c, r_t),
+                properties={"snr": float(i)},
+                confidence=0.95,
+            )
+            for i, (r_t, c) in enumerate(
+                [(100, 200), (300, 400), (500, 600)]
+            )
+        ]
+        ds = DetectionSet(detections=detections, detector_name="CA-CFAR")
+
+        r = _bench(f"DetectionSet.to_geojson.{sz}", ds.to_geojson,
+                   version="1.0.0", **kw)
+        if r:
+            results.append(r)
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  DetectionSet benchmarks ({exc})")
+
+    # --- Fields lookup ---
+    try:
+        from grdl.image_processing.detection import Fields
+
+        r = _bench("Fields.lookup.SNR", lambda: Fields.SNR,
+                   version="1.0.0", **kw)
+        if r:
+            results.append(r)
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  Fields benchmarks ({exc})")
 
     return results
 
@@ -1017,6 +1176,33 @@ def run_geolocation_benchmarks(
     except (ImportError, Exception) as exc:
         print(f"  SKIP  ConstantElevation benchmarks ({exc})")
 
+    # --- NoGeolocation (trivial identity fallback) ---
+    try:
+        from grdl.geolocation import NoGeolocation
+
+        nogeo = NoGeolocation(shape=(rows, cols))
+
+        r = _bench(
+            f"NoGeolocation.image_to_latlon.scalar.{sz}",
+            nogeo.image_to_latlon,
+            setup=lambda: ((rows // 2, cols // 2), {}), **kw,
+        )
+        if r:
+            results.append(r)
+
+        row_arr = np.random.uniform(0, rows, size=1000)
+        col_arr = np.random.uniform(0, cols, size=1000)
+        r = _bench(
+            f"NoGeolocation.image_to_latlon.batch1000.{sz}",
+            nogeo.image_to_latlon,
+            setup=lambda: ((row_arr, col_arr), {}), **kw,
+        )
+        if r:
+            results.append(r)
+
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  NoGeolocation benchmarks ({exc})")
+
     return results
 
 
@@ -1102,6 +1288,41 @@ def run_coregistration_benchmarks(
     except Exception as exc:
         print(f"  SKIP  FeatureMatchCoRegistration ({exc})")
 
+    # --- ProjectiveCoRegistration ---
+    try:
+        from grdl.coregistration import ProjectiveCoRegistration
+
+        # Need at least 4 control points for projective transform
+        pts_fixed_proj = np.array([
+            [rows * 0.2, cols * 0.2],
+            [rows * 0.2, cols * 0.8],
+            [rows * 0.8, cols * 0.2],
+            [rows * 0.8, cols * 0.8],
+            [rows * 0.5, cols * 0.5],
+            [rows * 0.3, cols * 0.7],
+        ], dtype=np.float64)
+        pts_moving_proj = (matrix @ pts_fixed_proj.T).T + offset
+
+        coreg = ProjectiveCoRegistration(
+            control_points_fixed=pts_fixed_proj,
+            control_points_moving=pts_moving_proj,
+        )
+
+        r = _bench(f"ProjectiveCoRegistration.estimate.{sz}",
+                    coreg.estimate,
+                    setup=lambda: ((fixed, moving), {}), **kw)
+        if r:
+            results.append(r)
+
+        result_obj = coreg.estimate(fixed, moving)
+        r = _bench(f"ProjectiveCoRegistration.apply.{sz}", coreg.apply,
+                    setup=lambda: ((moving, result_obj), {}), **kw)
+        if r:
+            results.append(r)
+
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  ProjectiveCoRegistration benchmarks ({exc})")
+
     return results
 
 
@@ -1159,6 +1380,69 @@ def run_ortho_benchmarks(
         print("  SKIP  Orthorectification benchmarks (rasterio not installed)")
     except Exception as exc:
         print(f"  SKIP  Orthorectification benchmarks ({exc})")
+
+    # --- OrthoPipeline (builder-pattern benchmark) ---
+    try:
+        from rasterio.transform import Affine as RioAffine
+
+        from grdl.geolocation import AffineGeolocation
+        from grdl.image_processing.ortho import OrthoPipeline
+
+        kw_ortho = dict(store=store, iterations=iterations, warmup=warmup,
+                        tags=tags, module=mod)
+
+        real_img = np.random.rand(rows, cols).astype(np.float32)
+        transform = RioAffine(0.00027, 0.0, -118.0,
+                              0.0, -0.00027, 34.0)
+        geo = AffineGeolocation(
+            transform=transform, shape=(rows, cols), crs="EPSG:4326",
+        )
+
+        pipeline = (
+            OrthoPipeline()
+            .with_source_array(real_img)
+            .with_geolocation(geo)
+            .with_resolution(0.00054, 0.00054)
+            .with_interpolation('bilinear')
+        )
+
+        r = _bench(f"OrthoPipeline.run.{sz}", pipeline.run,
+                    version="1.0.0", **kw_ortho)
+        if r:
+            results.append(r)
+
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  OrthoPipeline benchmarks ({exc})")
+
+    # --- compute_output_resolution (requires SICD data) ---
+    _data_dir = Path(__file__).resolve().parent.parent.parent / "data"
+    sar_path = (_find_data_file(_data_dir / "umbra", "*.nitf")
+                or _find_data_file(_data_dir / "umbra", "*.ntf"))
+    if sar_path:
+        try:
+            from grdl.IO.sar import SICDReader
+            from grdl.geolocation import SICDGeolocation
+            from grdl.image_processing.ortho import compute_output_resolution
+
+            with SICDReader(sar_path) as reader:
+                sicd_meta = reader.metadata
+                sicd_geo = SICDGeolocation.from_reader(reader)
+
+            real_kw = dict(store=store, iterations=iterations, warmup=warmup,
+                           tags={**tags, "data": "real"}, module=mod)
+
+            r = _bench(
+                "compute_output_resolution.sicd",
+                lambda: compute_output_resolution(sicd_meta, sicd_geo),
+                version="1.0.0", **real_kw,
+            )
+            if r:
+                results.append(r)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  compute_output_resolution benchmarks ({exc})")
+    else:
+        print("  SKIP  compute_output_resolution (SICD data not found)")
 
     return results
 
@@ -1375,6 +1659,7 @@ BENCHMARK_GROUPS = {
     "filters": run_filter_benchmarks,
     "intensity": run_intensity_benchmarks,
     "decomposition": run_decomposition_benchmarks,
+    "detection": run_detection_benchmarks,
     "pipeline": run_pipeline_benchmarks,
     "data_prep": run_data_prep_benchmarks,
     "io": run_io_benchmarks,
@@ -1409,9 +1694,9 @@ def run_suite(
         ``<cwd>/.benchmarks/``.
     only : List[str], optional
         Run only the named benchmark groups.  Valid names:
-        ``filters``, ``intensity``, ``decomposition``, ``pipeline``,
-        ``data_prep``, ``io``, ``geolocation``, ``coregistration``,
-        ``ortho``, ``sar``, ``workflow``.
+        ``filters``, ``intensity``, ``decomposition``, ``detection``,
+        ``pipeline``, ``data_prep``, ``io``, ``geolocation``,
+        ``coregistration``, ``ortho``, ``sar``, ``workflow``.
     skip_workflow : bool
         If ``True``, skip the workflow-level benchmark.
 
