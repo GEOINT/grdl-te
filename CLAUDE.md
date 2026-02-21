@@ -349,6 +349,29 @@ pytest tests/ -m "not requires_data"
 pytest tests/ -n auto --benchmark-disable
 ```
 
+## Dependency Management
+
+### Source of Truth: `pyproject.toml`
+
+**`pyproject.toml` is the single source of truth** for all dependencies. All package metadata and dependencies are defined here.
+
+### Keeping Files in Sync
+
+Two files must be kept synchronized:
+
+| File | Purpose | How to Update |
+|------|---------|---------------|
+| `pyproject.toml` | **Source of truth** — package metadata, all dependencies | Edit directly; this is the authoritative definition |
+| `requirements.txt` (if it exists) | Development convenience — pinned versions for reproducible environments | `pip freeze > requirements.txt` after updating dependencies in `pyproject.toml` and installing |
+
+**Note:** GRDL-TE is a **validation suite, not a published library**, so there is no `.github/workflows/publish.yml` or PyPI versioning requirement.
+
+**Workflow:**
+1. Update dependencies in `pyproject.toml` (add new packages, change versions, create/rename extras)
+2. Install dependencies: `pip install -e ".[all,dev]"` (or appropriate extras for your work)
+3. If `requirements.txt` exists in this project, regenerate it: `pip freeze > requirements.txt`
+4. Commit both files
+
 ## Dependencies
 
 **Required:**

@@ -377,6 +377,26 @@ The `workflows/` directory contains example grdl-runtime workflow definitions fo
 4. **Create test file** `tests/test_io_<reader>.py` with 3-level structure (format, quality, integration)
 5. **Register markers** in `pyproject.toml`
 
+## Dependency Management
+
+### Source of Truth: `pyproject.toml`
+
+All dependencies are defined in `pyproject.toml`. Keep these files synchronized:
+
+- **`pyproject.toml`** — source of truth for versions and dependencies
+- **`requirements.txt`** — regenerate with `pip freeze > requirements.txt` after updating `pyproject.toml`
+
+**Note:** GRDL-TE is a **validation suite, not a published library**, so there is no `.github/workflows/publish.yml` or PyPI versioning requirement.
+
+### Updating Dependencies
+
+1. Update dependencies in `pyproject.toml` (add new packages, change versions, create/rename extras)
+2. Install dependencies: `pip install -e ".[all,dev]"` (or appropriate extras for your work)
+3. If `requirements.txt` exists, regenerate it: `pip freeze > requirements.txt`
+4. Commit both files
+
+See [CLAUDE.md](CLAUDE.md#dependency-management) for detailed dependency management guidelines.
+
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
