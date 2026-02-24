@@ -29,8 +29,7 @@
 
 > **Note:** "Benchmarked" means the component has at least one entry in `suite.py`.
 > The "Validation Test" column shows the dedicated `tests/validation/` file that
-> exercises correctness assertions. Components marked "suite.py only" have
-> performance benchmarks but no separate functional validation test file.
+> exercises correctness assertions. All 78 components now have dedicated validation tests.
 
 ---
 
@@ -40,22 +39,22 @@
 
 | Component | suite.py | YAML | Validation Test |
 |-----------|:--------:|:----:|-----------------|
-| MeanFilter | Y | Y | suite.py only |
-| GaussianFilter | Y | Y | suite.py only |
-| MedianFilter | Y | Y | suite.py only |
-| MinFilter | Y | Y | suite.py only |
-| MaxFilter | Y | Y | suite.py only |
-| StdDevFilter | Y | Y | suite.py only |
-| LeeFilter | Y | Y | suite.py only |
-| ComplexLeeFilter | Y | Y | suite.py only |
-| PhaseGradientFilter | Y | Y | suite.py only |
+| MeanFilter | Y | Y | test_filters.py |
+| GaussianFilter | Y | Y | test_filters.py |
+| MedianFilter | Y | Y | test_filters.py |
+| MinFilter | Y | Y | test_filters.py |
+| MaxFilter | Y | Y | test_filters.py |
+| StdDevFilter | Y | Y | test_filters.py |
+| LeeFilter | Y | Y | test_filters.py |
+| ComplexLeeFilter | Y | Y | test_filters.py |
+| PhaseGradientFilter | Y | Y | test_filters.py |
 
 ### Intensity Transforms (2/2)
 
 | Component | suite.py | YAML | Validation Test |
 |-----------|:--------:|:----:|-----------------|
-| ToDecibels | Y | Y | suite.py only |
-| PercentileStretch | Y | Y | suite.py only |
+| ToDecibels | Y | Y | test_intensity.py |
+| PercentileStretch | Y | Y | test_intensity.py |
 
 ### Decomposition (3/3)
 
@@ -109,15 +108,15 @@
 
 | Component | suite.py | YAML | Validation Test |
 |-----------|:--------:|:----:|-----------------|
-| Pipeline | Y | - | suite.py only |
+| Pipeline | Y | - | test_pipeline.py |
 
 ### Data Prep (3/3)
 
 | Component | suite.py | YAML | Validation Test |
 |-----------|:--------:|:----:|-----------------|
-| ChipExtractor | Y | - | suite.py only |
-| Tiler | Y | - | suite.py only |
-| Normalizer | Y | - | suite.py only |
+| ChipExtractor | Y | - | test_data_prep.py |
+| Tiler | Y | - | test_data_prep.py |
+| Normalizer | Y | - | test_data_prep.py |
 
 ### IO Readers/Writers (22/22)
 
@@ -130,8 +129,8 @@
 | JP2Reader | Y | Y | test_io_jpeg2000.py |
 | NITFReader | Y | Y | test_io_nitf.py |
 | NITFWriter | Y | - | test_io_sar_writers.py |
-| NumpyWriter | Y | - | suite.py only |
-| PngWriter | Y | - | suite.py only |
+| NumpyWriter | Y | - | test_io_numpy_png.py |
+| PngWriter | Y | - | test_io_numpy_png.py |
 | SICDReader | Y | Y | test_io_nitf.py |
 | SICDWriter | Y | - | test_io_sar_writers.py |
 | Sentinel1SLCReader | Y | - | test_io_sentinel1.py |
@@ -188,20 +187,23 @@
 
 ## Test File Inventory
 
-### Validation Tests (`tests/validation/` — 27 files)
+### Validation Tests (`tests/validation/` — 32 files)
 
 | File | Components Covered |
 |------|--------------------|
 | test_coregistration_projective.py | AffineCoRegistration, FeatureMatchCoRegistration, ProjectiveCoRegistration |
 | test_decomposition_halpha.py | PauliDecomposition, DualPolHAlpha |
+| test_data_prep.py | ChipExtractor, Tiler, Normalizer |
 | test_detection_cfar.py | CACFARDetector, GOCFARDetector, SOCFARDetector, OSCFARDetector |
 | test_detection_models.py | Detection, DetectionSet, FieldDefinition, Fields |
 | test_elevation_models.py | DTEDElevation, GeoTIFFDEM, GeoidCorrection |
+| test_filters.py | MeanFilter, GaussianFilter, MedianFilter, MinFilter, MaxFilter, StdDevFilter, LeeFilter, ComplexLeeFilter, PhaseGradientFilter |
 | test_geolocation_affine_real.py | AffineGeolocation (real Landsat data) |
 | test_geolocation_base.py | AffineGeolocation, GCPGeolocation, SICDGeolocation, NoGeolocation |
 | test_geolocation_elevation.py | ConstantElevation, ElevationModel ABC |
 | test_geolocation_sentinel1.py | Sentinel1SLCGeolocation, NoGeolocation |
 | test_geolocation_utils.py | Haversine, footprints, bounds, pixel checks |
+| test_intensity.py | ToDecibels, PercentileStretch |
 | test_interpolation.py | Lanczos, KaiserSinc, Lagrange, Farrow, Polyphase, ThiranDelay |
 | test_io_aster.py | ASTERReader |
 | test_io_biomass.py | BIOMASSL1Reader, BIOMASSCatalog |
@@ -211,12 +213,14 @@
 | test_io_hdf5.py | HDF5Reader, HDF5Writer, VIIRSReader |
 | test_io_jpeg2000.py | JP2Reader |
 | test_io_nitf.py | NITFReader, SICDReader |
+| test_io_numpy_png.py | NumpyWriter, PngWriter |
 | test_io_sar_writers.py | SICDWriter, NITFWriter |
 | test_io_sentinel1.py | Sentinel1SLCReader |
 | test_io_sentinel2.py | Sentinel2Reader |
 | test_io_sidd.py | SIDDReader |
 | test_io_terrasar.py | TerraSARReader, TerraSARMetadata |
 | test_ortho_pipeline.py | Orthorectifier, OutputGrid, OrthoPipeline, OrthoResult, compute_output_resolution |
+| test_pipeline.py | Pipeline |
 | test_sar_image_formation.py | CollectionGeometry, PolarGrid, PFA, RDA, StripmapPFA, FFBP, SubaperturePartitioner |
 | test_sar_multilook.py | MultilookDecomposition, CSIProcessor, SublookDecomposition |
 
@@ -230,19 +234,6 @@
 | test_benchmark_source.py | BenchmarkSource construction and resolution |
 | test_benchmark_store.py | JSONBenchmarkStore persistence |
 | test_component_benchmark.py | ComponentBenchmark (single-function timing) |
-
-### Components Without Dedicated Validation Tests
-
-The following 16 components are benchmarked in `suite.py` but lack a dedicated
-validation test file with correctness assertions. They are exercised as part of
-benchmark runs and integration tests in other files (e.g., Normalizer is tested
-indirectly in IO integration tests).
-
-- **Filters** (9): MeanFilter, GaussianFilter, MedianFilter, MinFilter, MaxFilter, StdDevFilter, LeeFilter, ComplexLeeFilter, PhaseGradientFilter
-- **Intensity** (2): ToDecibels, PercentileStretch
-- **Pipeline** (1): Pipeline
-- **Data Prep** (3): ChipExtractor, Tiler, Normalizer
-- **IO** (2): NumpyWriter, PngWriter
 
 ---
 
@@ -278,8 +269,9 @@ All data directories contain a `README.md` with download/acquisition instruction
 - **Phase 2c (2026-02-24):** TerraSAR-X benchmarks — TerraSARReader, TerraSARMetadata.
 - **Phase 3 (2026-02-24):** SAR image formation — CollectionGeometry, PolarGrid, PolarFormatAlgorithm, SubaperturePartitioner, RangeDopplerAlgorithm, StripmapPFA, FastBackProjection. New `run_image_formation_benchmarks()` group. YAML workflow updated to v2.0.0 (28 steps).
 - **Phase 4 (2026-02-24):** Verification — all markers in pyproject.toml, all conftest.py fixtures, 13 benchmark groups total.
+- **Phase 5 (2026-02-24):** Validation test suite for 16 previously uncovered components — test_filters.py (85 tests: 9 filters with scipy golden refs, dtype contracts, 3D bandwise, edge cases), test_intensity.py (18 tests: ToDecibels, PercentileStretch), test_pipeline.py (10 tests: composition, progress, nested), test_data_prep.py (42 tests: ChipExtractor, Tiler, Normalizer), test_io_numpy_png.py (22 tests: NumpyWriter, PngWriter roundtrip). 4 new pytest markers added (filters, intensity, pipeline, data_prep).
 
-**Final state:** 78/78 components benchmarked. 13 benchmark groups in suite.py. 28-step YAML workflow. 27 validation test files + 6 benchmarking test files.
+**Final state:** 78/78 components benchmarked. 78/78 with dedicated validation tests. 13 benchmark groups in suite.py. 28-step YAML workflow. 32 validation test files + 6 benchmarking test files.
 
 ---
 

@@ -159,19 +159,26 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
 
         # Build execute arguments
         exec_kwargs: Dict[str, Any] = dict(execute_kwargs)
-        prefer_gpu = exec_kwargs.pop("prefer_gpu", False)
-        executor = DAGExecutor(
-            self._workflow, gpu=GpuBackend(prefer_gpu=prefer_gpu),
-        )
+
+        # Use the workflow's own execute() to support both Workflow (builder)
+        # and WorkflowDefinition (DAG) objects.
+        if hasattr(self._workflow, 'execute'):
+            run_fn = self._workflow.execute
+        else:
+            prefer_gpu = exec_kwargs.pop("prefer_gpu", False)
+            executor = DAGExecutor(
+                self._workflow, gpu=GpuBackend(prefer_gpu=prefer_gpu),
+            )
+            run_fn = executor.execute
 
         # Warmup
         for i in range(self._warmup):
-            executor.execute(resolved, **exec_kwargs)
+            run_fn(resolved, **exec_kwargs)
 
         # Measurement runs
         all_workflow_metrics: List[Any] = []
         for i in range(self._iterations):
-            result = executor.execute(resolved, **exec_kwargs)
+            result = run_fn(resolved, **exec_kwargs)
             all_workflow_metrics.append(result.metrics)
             if progress_callback is not None:
                 progress_callback(i + 1, self._iterations)

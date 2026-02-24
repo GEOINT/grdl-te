@@ -70,6 +70,10 @@ markers = [
     "elevation: Elevation model tests",
     "terrasar: TerraSAR-X/TanDEM-X tests",
     "interpolation: Interpolation algorithm tests",
+    "filters: Spatial image filter tests",
+    "intensity: Intensity transform tests",
+    "pipeline: Pipeline composition tests",
+    "data_prep: Data preparation tests (ChipExtractor, Tiler, Normalizer)",
 ]
 
 [tool.setuptools.packages.find]
