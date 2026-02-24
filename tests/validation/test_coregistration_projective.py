@@ -150,7 +150,7 @@ class TestProjectiveLevel2:
         scipy.ndimage.affine_transform uses the same moving→fixed convention
         (moving[r,c] = fixed[matrix @ [r,c] + offset]), so true_matrix IS
         the moving→fixed transform.  H[:2,:2] must agree with true_matrix to
-        within 0.05 (≈ 3° angular error) under noiseless conditions.
+        within 0.005 ≈ 0.3° angular tolerence under noiseless conditions.
         """
         fixed, moving, pts_f, pts_m, true_matrix, true_offset = synthetic_image_pair
         coreg = ProjectiveCoRegistration(
@@ -165,9 +165,9 @@ class TestProjectiveLevel2:
         recovered_2x2 = H[:2, :2] / scale
 
         diff = np.abs(recovered_2x2 - true_matrix)
-        assert np.all(diff < 0.05), (
+        assert np.all(diff < 0.005), (
             f"H[:2,:2] differs from true_matrix by up to {diff.max():.4f} "
-            "(tolerance 0.05 ≈ 3° angular error). With noiseless control "
+            "(tolerance 0.005 ≈ 0.3° angular error). With noiseless control "
             "points this should be near-zero. Check the homography solver."
         )
 

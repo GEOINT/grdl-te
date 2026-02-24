@@ -207,8 +207,8 @@ class TestDualPolHAlphaLevel2:
         result = halpha.decompose(co, cross)
         margin = 15
         mean_H = np.mean(result['entropy'][margin:-margin, margin:-margin])
-        assert mean_H > 0.35, (
-            f"Mean entropy {mean_H:.3f} is below the expected value for this "
+        assert 0.35 < mean_H < 0.50, (
+            f"Mean entropy {mean_H:.3f} is not within the expected values for this "
             "fixture (theoretical ≈ 0.41 for cross_pol power ratio 0.09). "
             "The eigenvalue normalisation or -p·log2(p) computation is likely wrong."
         )
@@ -366,7 +366,7 @@ class TestDualPolHAlphaLevel3:
         for ch, name in enumerate(('R', 'G', 'B')):
             channel = rgb[:, :, ch]
             ch_range = channel.max() - channel.min()
-            assert ch_range > 0.05, (
+            assert ch_range > 0.2, (
                 f"Channel {name} (index {ch}) has near-zero range "
                 f"({ch_range:.4f}) — the H-Alpha→RGB mapping is not "
                 "producing distinct channel content"

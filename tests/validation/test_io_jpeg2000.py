@@ -423,10 +423,15 @@ def test_sentinel2_normalizer_integration(require_sentinel2_file):
         assert isinstance(normalized, np.ndarray)
         assert normalized.dtype == np.float64
         assert np.isfinite(normalized).all()
-        assert 0.0 <= normalized.min() <= normalized.max() <= 1.0
+        assert normalized.min() == pytest.approx(0.0, abs=1e-6), (
+            f"MinMax output min = {normalized.min():.8f}; must be exactly 0.0"
+        )
+        assert normalized.max() == pytest.approx(1.0, abs=1e-6), (
+            f"MinMax output max = {normalized.max():.8f}; must be exactly 1.0"
+        )
 
-        print(f"MinMax normalized (15-bit): [{normalized.min():.3f}, "
-              f"{normalized.max():.3f}]")
+        print(f"MinMax normalized (15-bit): [{normalized.min():.6f}, "
+              f"{normalized.max():.6f}]")
 
         # Test zscore normalization
         normalizer_z = Normalizer(method='zscore')

@@ -286,7 +286,7 @@ class TestOrthoPipelineLevel2:
         valid_nearest = nearest_result.data[nearest_result.data != 0.0]
         input_values = set(image.flatten().tolist())
         for v in valid_nearest.flatten()[:500]:   # sample first 500 to keep fast
-            assert v in input_values or np.isclose(v, list(input_values), atol=1e-5).any(), (
+            assert v in input_values, (
                 f"Nearest-neighbour output value {v} not found in input — "
                 "nearest is blending pixels like bilinear"
             )

@@ -114,4 +114,9 @@ def test_crsd_integration_with_normalizer(require_crsd_file):
         normalizer = Normalizer(method='minmax')
         normalized = normalizer.normalize(magnitude)
         assert np.isfinite(normalized).all()
-        assert 0.0 <= normalized.min() <= normalized.max() <= 1.0
+        assert normalized.min() == pytest.approx(0.0, abs=1e-6), (
+            f"MinMax output min = {normalized.min():.8f}; must be exactly 0.0"
+        )
+        assert normalized.max() == pytest.approx(1.0, abs=1e-6), (
+            f"MinMax output max = {normalized.max():.8f}; must be exactly 1.0"
+        )

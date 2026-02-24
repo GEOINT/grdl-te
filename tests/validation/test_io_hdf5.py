@@ -435,9 +435,14 @@ def test_viirs_normalizer_integration(require_viirs_file):
         assert isinstance(normalized, np.ndarray)
         assert normalized.dtype == np.float64
         assert np.isfinite(normalized).all()
-        assert 0.0 <= normalized.min() <= normalized.max() <= 1.0
+        assert normalized.min() == pytest.approx(0.0, abs=1e-6), (
+            f"MinMax output min = {normalized.min():.8f}; must be exactly 0.0"
+        )
+        assert normalized.max() == pytest.approx(1.0, abs=1e-6), (
+            f"MinMax output max = {normalized.max():.8f}; must be exactly 1.0"
+        )
 
-        print(f"MinMax normalized: [{normalized.min():.3f}, {normalized.max():.3f}]")
+        print(f"MinMax normalized: [{normalized.min():.6f}, {normalized.max():.6f}]")
 
 
 @pytest.mark.slow
@@ -549,6 +554,11 @@ def test_viirs_multi_dataset_workflow(require_viirs_file):
 
             assert normalized.shape == chip.shape
             assert np.isfinite(normalized).all()
-            assert 0.0 <= normalized.min() <= normalized.max() <= 1.0
+            assert normalized.min() == pytest.approx(0.0, abs=1e-6), (
+                f"MinMax output min = {normalized.min():.8f}; must be exactly 0.0"
+            )
+            assert normalized.max() == pytest.approx(1.0, abs=1e-6), (
+                f"MinMax output max = {normalized.max():.8f}; must be exactly 1.0"
+            )
 
             print(f"Processed dataset: {path}, shape: {chip.shape}")

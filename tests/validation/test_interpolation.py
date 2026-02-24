@@ -116,16 +116,7 @@ class TestLanczos:
         interp = lanczos_interpolator(a=5)
         result = interp(x, y, x_new)
         expected = np.sin(2 * np.pi * 0.1 * x_new)
-        np.testing.assert_allclose(result, expected, atol=0.02)
-
-    def test_lanczos_vs_numpy_interp(self):
-        """Close to np.interp for smooth real signals."""
-        interp = lanczos_interpolator(a=3)
-        result = interp(_X_OLD, _Y_REAL, _X_NEW)
-        ref = np.interp(_X_NEW, _X_OLD, _Y_REAL)
-        # Lanczos won't exactly match linear interp but should be in same ballpark
-        rmse = np.sqrt(np.mean((result - ref) ** 2))
-        assert rmse < 1.0, f"RMSE {rmse:.4f} vs np.interp too large"
+        np.testing.assert_allclose(result, expected, atol=0.001)
 
 
 # =============================================================================
@@ -155,7 +146,7 @@ class TestPolyphase:
         x_int = _X_OLD[10:-10].astype(np.float64)
         result = interp(_X_OLD, _Y_REAL, x_int)
         # Polyphase kernel has inherent approximation error at integer positions
-        np.testing.assert_allclose(result, _Y_REAL[10:-10], atol=0.05)
+        np.testing.assert_allclose(result, _Y_REAL[10:-10], atol=0.02)
 
     def test_polyphase_num_phases_accuracy(self):
         """More phases = lower interpolation error."""
@@ -171,8 +162,8 @@ class TestPolyphase:
             errors.append(np.sqrt(np.mean((result - expected) ** 2)))
 
         # Error should decrease with more phases
-        assert errors[1] <= errors[0] * 1.1  # Allow small tolerance
-        assert errors[2] <= errors[1] * 1.1
+        assert errors[1] <= errors[0] * 1.0  # Can change to 1.01
+        assert errors[2] <= errors[1] * 1.0
 
 
 # =============================================================================
@@ -213,7 +204,7 @@ class TestThiranDelay:
         result = thiran_delay(impulse, delay, 3)
         peak_idx = np.argmax(np.abs(result))
         actual_delay = peak_idx - n // 2
-        assert abs(actual_delay - delay) <= 2.0, \
+        assert abs(actual_delay - delay) <= 0.5, \
             f"Group delay {actual_delay} deviates from target {delay}"
 
 

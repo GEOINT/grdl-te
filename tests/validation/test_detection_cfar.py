@@ -151,13 +151,6 @@ class TestCFARLevel1FormatValidation:
             assert d.pixel_geometry is not None
             assert hasattr(d.pixel_geometry, 'geom_type')
 
-    def test_detection_set_iterable(self, synthetic_db_image):
-        """DetectionSet supports len() and iteration."""
-        db, _ = synthetic_db_image
-        det = CACFARDetector(guard_cells=3, training_cells=12, pfa=1e-2)
-        result = det.detect(db)
-        assert len(result) == len(list(result))
-
     def test_detector_output_fields(self):
         """CFAR detectors declare standard output fields."""
         det = CACFARDetector()

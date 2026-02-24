@@ -143,4 +143,9 @@ def test_aster_normalizer_integration(require_aster_file):
         normalizer = Normalizer(method='minmax')
         normalized = normalizer.normalize(chip.astype(np.float32))
         assert np.isfinite(normalized).all()
-        assert 0.0 <= normalized.min() <= normalized.max() <= 1.0
+        assert normalized.min() == pytest.approx(0.0, abs=1e-6), (
+            f"MinMax output min = {normalized.min():.8f}; must be exactly 0.0"
+        )
+        assert normalized.max() == pytest.approx(1.0, abs=1e-6), (
+            f"MinMax output max = {normalized.max():.8f}; must be exactly 1.0"
+        )
