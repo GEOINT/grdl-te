@@ -68,6 +68,66 @@ def umbra_data_dir(data_dir):
     return data_dir / "umbra"
 
 
+@pytest.fixture(scope="session")
+def cphd_data_dir(data_dir):
+    """CPHD phase history data directory."""
+    return data_dir / "cphd"
+
+
+@pytest.fixture(scope="session")
+def crsd_data_dir(data_dir):
+    """CRSD data directory."""
+    return data_dir / "crsd"
+
+
+@pytest.fixture(scope="session")
+def sidd_data_dir(data_dir):
+    """SIDD detected imagery data directory."""
+    return data_dir / "sidd"
+
+
+@pytest.fixture(scope="session")
+def sentinel1_data_dir(data_dir):
+    """Sentinel-1 SLC data directory."""
+    return data_dir / "sentinel1"
+
+
+@pytest.fixture(scope="session")
+def aster_data_dir(data_dir):
+    """ASTER L1T data directory."""
+    return data_dir / "aster"
+
+
+@pytest.fixture(scope="session")
+def biomass_data_dir(data_dir):
+    """BIOMASS L1 data directory."""
+    return data_dir / "biomass"
+
+
+@pytest.fixture(scope="session")
+def dted_data_dir(data_dir):
+    """DTED elevation tile directory."""
+    return data_dir / "dted"
+
+
+@pytest.fixture(scope="session")
+def dem_data_dir(data_dir):
+    """GeoTIFF DEM data directory."""
+    return data_dir / "dem"
+
+
+@pytest.fixture(scope="session")
+def geoid_data_dir(data_dir):
+    """Geoid model data directory."""
+    return data_dir / "geoid"
+
+
+@pytest.fixture(scope="session")
+def terrasar_data_dir(data_dir):
+    """TerraSAR-X / TanDEM-X product data directory."""
+    return data_dir / "terrasar"
+
+
 def find_data_file(directory: Path, pattern: str) -> Optional[Path]:
     """
     Find first file matching pattern in directory.
@@ -170,3 +230,77 @@ def require_sentinel2_file(sentinel2_data_dir):
 def require_umbra_file(umbra_data_dir):
     """Umbra SICD NITF file."""
     return require_data_file(umbra_data_dir, "*.nitf")
+
+
+@pytest.fixture
+def require_cphd_file(cphd_data_dir):
+    """CPHD phase history file."""
+    return require_data_file(cphd_data_dir, "*.cphd")
+
+
+@pytest.fixture
+def require_crsd_file(crsd_data_dir):
+    """CRSD data file."""
+    return require_data_file(crsd_data_dir, "*.crsd")
+
+
+@pytest.fixture
+def require_sidd_file(sidd_data_dir):
+    """SIDD NITF file."""
+    return require_data_file(sidd_data_dir, "*.nitf")
+
+
+@pytest.fixture
+def require_sentinel1_file(sentinel1_data_dir):
+    """Sentinel-1 SLC SAFE directory."""
+    return require_data_file(sentinel1_data_dir, "*.SAFE")
+
+
+@pytest.fixture
+def require_aster_file(aster_data_dir):
+    """ASTER L1T HDF file."""
+    return require_data_file(aster_data_dir, "AST_L1T*.hdf")
+
+
+@pytest.fixture
+def require_biomass_file(biomass_data_dir):
+    """BIOMASS L1 GeoTIFF file."""
+    return require_data_file(biomass_data_dir, "BIO_S2_*.tif")
+
+
+@pytest.fixture
+def require_dted_dir(dted_data_dir):
+    """DTED tile directory with at least one .dt? file."""
+    if not dted_data_dir.exists() or not list(dted_data_dir.glob("**/*.dt?")):
+        pytest.skip(f"DTED data not found in {dted_data_dir}")
+    return dted_data_dir
+
+
+@pytest.fixture
+def require_dem_file(dem_data_dir):
+    """GeoTIFF DEM file."""
+    return require_data_file(dem_data_dir, "*.tif")
+
+
+@pytest.fixture
+def require_geoid_file(geoid_data_dir):
+    """EGM96 geoid model file."""
+    return require_data_file(geoid_data_dir, "*.pgm")
+
+
+@pytest.fixture
+def require_terrasar_dir(terrasar_data_dir):
+    """TerraSAR-X product directory (TSX1_* or TDX1_*)."""
+    if not terrasar_data_dir.exists():
+        pytest.skip(f"TerraSAR data directory not found: {terrasar_data_dir}")
+    for candidate in sorted(terrasar_data_dir.iterdir()):
+        if candidate.is_dir() and (
+            candidate.name.startswith("TSX1_")
+            or candidate.name.startswith("TDX1_")
+        ):
+            return candidate
+    # Check for annotation XMLs directly
+    xmls = sorted(terrasar_data_dir.glob("TSX1_SAR__*.xml"))
+    if xmls:
+        return terrasar_data_dir
+    pytest.skip(f"No TSX1_*/TDX1_* product found in {terrasar_data_dir}")

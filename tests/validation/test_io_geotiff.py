@@ -472,9 +472,18 @@ def test_landsat_normalizer_integration(require_landsat_file):
         assert isinstance(normalized, np.ndarray)
         assert normalized.dtype == np.float64
         assert np.isfinite(normalized).all()
-        assert 0.0 <= normalized.min() <= normalized.max() <= 1.0
+        # MinMax guarantees: minimum IS 0.0 and maximum IS 1.0.
+        # The old range check '0 <= min <= max <= 1' would pass for a
+        # normalizer that returns 0.5 everywhere — it tests containment,
+        # not the actual min/max contract.
+        assert normalized.min() == pytest.approx(0.0, abs=1e-6), (
+            f"MinMax output min = {normalized.min():.8f}; must be exactly 0.0"
+        )
+        assert normalized.max() == pytest.approx(1.0, abs=1e-6), (
+            f"MinMax output max = {normalized.max():.8f}; must be exactly 1.0"
+        )
 
-        print(f"MinMax normalized: [{normalized.min():.3f}, {normalized.max():.3f}]")
+        print(f"MinMax normalized: [{normalized.min():.6f}, {normalized.max():.6f}]")
 
         # Test zscore normalization
         normalizer_z = Normalizer(method='zscore')
@@ -482,12 +491,20 @@ def test_landsat_normalizer_integration(require_landsat_file):
 
         assert normalized_z.dtype == np.float64
         assert np.isfinite(normalized_z).all()
-        # Z-score should be roughly centered at 0
-        assert -10 < normalized_z.mean() < 10
-        assert 0 < normalized_z.std() < 10
+        # Z-score is defined as (x - μ) / σ, so the output MUST have
+        # mean = 0.0 and std = 1.0 exactly (up to floating-point precision).
+        # The old tolerances of (-10, 10) and (0, 10) were almost unconstrained.
+        assert abs(normalized_z.mean()) < 1e-6, (
+            f"Z-score output mean = {normalized_z.mean():.2e}; must be ≈ 0.0. "
+            "A non-zero mean means the subtraction of μ was skipped or wrong."
+        )
+        assert abs(normalized_z.std() - 1.0) < 1e-4, (
+            f"Z-score output std = {normalized_z.std():.6f}; must be ≈ 1.0. "
+            "A std ≠ 1 means the division by σ was skipped or wrong."
+        )
 
-        print(f"Z-score normalized: mean={normalized_z.mean():.3f}, "
-              f"std={normalized_z.std():.3f}")
+        print(f"Z-score normalized: mean={normalized_z.mean():.2e}, "
+              f"std={normalized_z.std():.6f}")
 
 
 @pytest.mark.slow

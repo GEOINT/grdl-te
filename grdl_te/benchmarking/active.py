@@ -34,7 +34,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 # Optional: grdl-runtime
 try:
-    from grdl_rt.execution.builder import Workflow
+    from grdl_rt.execution.dag_executor import DAGExecutor
+    from grdl_rt.execution.gpu import GpuBackend
     from grdl_rt.execution.result import WorkflowResult
     _HAS_RUNTIME = True
 except ImportError:
@@ -158,15 +159,19 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
 
         # Build execute arguments
         exec_kwargs: Dict[str, Any] = dict(execute_kwargs)
+        prefer_gpu = exec_kwargs.pop("prefer_gpu", False)
+        executor = DAGExecutor(
+            self._workflow, gpu=GpuBackend(prefer_gpu=prefer_gpu),
+        )
 
         # Warmup
         for i in range(self._warmup):
-            self._workflow.execute(resolved, **exec_kwargs)
+            executor.execute(resolved, **exec_kwargs)
 
         # Measurement runs
         all_workflow_metrics: List[Any] = []
         for i in range(self._iterations):
-            result = self._workflow.execute(resolved, **exec_kwargs)
+            result = executor.execute(resolved, **exec_kwargs)
             all_workflow_metrics.append(result.metrics)
             if progress_callback is not None:
                 progress_callback(i + 1, self._iterations)

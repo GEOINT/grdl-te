@@ -152,37 +152,94 @@ class TestDualPolHAlphaLevel2:
         assert np.all(A >= -1e-10), f"Anisotropy min = {A.min()}"
         assert np.all(A <= 1.0 + 1e-10), f"Anisotropy max = {A.max()}"
 
-    def test_span_non_negative(self, synthetic_dual_pol):
-        """Span (total power) is non-negative."""
+    def test_span_equals_total_power(self, synthetic_dual_pol):
+        """Span must equal the windowed sum of co-pol and cross-pol power.
+
+        The mathematical definition of span is:
+            span = |S_hh|² + |S_hv|²
+
+        Checking span >= 0 is a mathematical truism (power is always real and
+        non-negative).  This test verifies the QUANTITY, not just the sign:
+        the mean span in the image interior must match the expected total power
+        within 5% (tolerance covers boundary windowing effects).
+        """
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
         result = halpha.decompose(co, cross)
         span = result['span']
-        assert np.all(span >= -1e-10), f"Span min = {span.min()}"
+
+        expected_mean_power = (
+            np.mean(np.abs(co) ** 2) + np.mean(np.abs(cross) ** 2)
+        )
+        margin = 10
+        interior_mean_span = np.mean(span[margin:-margin, margin:-margin])
+
+        np.testing.assert_allclose(
+            interior_mean_span,
+            expected_mean_power,
+            rtol=0.05,
+            err_msg=(
+                f"Interior mean span {interior_mean_span:.4f} deviates from "
+                f"expected total power {expected_mean_power:.4f} by > 5%. "
+                "Verify span = |co|² + |cross|², not a different quantity."
+            ),
+        )
 
     def test_random_scattering_high_entropy(self, synthetic_dual_pol):
-        """Random complex Gaussian data should have moderate-high entropy."""
+        """Entropy must match the theoretical value for this fixture's power ratio.
+
+        The fixture uses cross_pol amplitude = 0.3, giving power = 0.09
+        relative to co_pol power = 1.0.  The normalised eigenvalue
+        probabilities are:
+            p1 = 1 / (1 + 0.09) ≈ 0.917
+            p2 = 0.09 / (1 + 0.09) ≈ 0.083
+        Theoretical entropy:
+            H = -(p1·log2(p1) + p2·log2(p2)) ≈ 0.41
+
+        The threshold > 0.35 catches severe underestimation (e.g., a broken
+        normalisation returning H ≈ 0.2) while being physically justified for
+        the actual fixture.  This is NOT a test for maximum entropy — for that
+        see test_zero_cross_pol_gives_zero_entropy and the equal-power test in
+        TestDualPolHAlphaLevel3.
+        """
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=11)
         result = halpha.decompose(co, cross)
-        H = result['entropy']
-        # Random data: entropy should be moderate (> 0.3 for dual-pol)
-        mean_H = np.mean(H)
-        assert mean_H > 0.2, f"Mean entropy {mean_H:.3f} too low for random data"
+        margin = 15
+        mean_H = np.mean(result['entropy'][margin:-margin, margin:-margin])
+        assert mean_H > 0.35, (
+            f"Mean entropy {mean_H:.3f} is below the expected value for this "
+            "fixture (theoretical ≈ 0.41 for cross_pol power ratio 0.09). "
+            "The eigenvalue normalisation or -p·log2(p) computation is likely wrong."
+        )
 
     def test_larger_window_smoother_output(self, synthetic_dual_pol):
-        """Larger window size produces smoother (lower variance) entropy."""
+        """Larger window must produce quantifiably lower entropy variance.
+
+        For a box-filter of size N on white noise, output variance scales as
+        1/N².  Going from window=3 to window=15 (5× larger) should give at
+        least a 10× variance reduction (conservative vs theoretical 25×).
+
+        The old test only checked var_large < var_small, which would pass
+        even if the window were not applied at all (e.g., if the implementation
+        accidentally used window=1 regardless of the argument).
+        """
         co, cross = synthetic_dual_pol
         halpha_small = DualPolHAlpha(window_size=3)
         halpha_large = DualPolHAlpha(window_size=15)
-        result_small = halpha_small.decompose(co, cross)
-        result_large = halpha_large.decompose(co, cross)
-        # Larger window should produce lower variance in entropy
-        var_small = np.var(result_small['entropy'])
-        var_large = np.var(result_large['entropy'])
-        assert var_large < var_small, (
-            f"Larger window variance ({var_large:.6f}) >= "
-            f"smaller window variance ({var_small:.6f})"
+        margin = 20
+        H_small = halpha_small.decompose(co, cross)['entropy']
+        H_large = halpha_large.decompose(co, cross)['entropy']
+
+        var_small = np.var(H_small[margin:-margin, margin:-margin])
+        var_large = np.var(H_large[margin:-margin, margin:-margin])
+
+        ratio = var_small / (var_large + 1e-12)
+        assert ratio > 10.0, (
+            f"Variance ratio (window=3 / window=15) = {ratio:.2f}; "
+            f"expected > 10×. var_small={var_small:.6f}, "
+            f"var_large={var_large:.6f}. If the ratio is near 1.0, "
+            "the window_size argument is being ignored."
         )
 
     def test_all_outputs_finite(self, synthetic_dual_pol):
@@ -203,13 +260,75 @@ class TestDualPolHAlphaLevel3:
     """Validate to_rgb() composite generation."""
 
     @pytest.mark.integration
+    def test_zero_cross_pol_gives_zero_entropy(self):
+        """Zero cross-pol input must yield entropy = 0 in the interior.
+
+        With S_hv = 0, the 2×2 coherency matrix is rank-1 (one non-zero
+        eigenvalue).  A rank-1 matrix has a single dominant scattering
+        mechanism, so entropy = 0 by definition.  Any non-zero entropy for
+        this input proves the eigenvalue decomposition has a bug.
+        """
+        halpha = DualPolHAlpha(window_size=7)
+        rows, cols = 64, 64
+        rng = np.random.default_rng(0)
+        co = (
+            rng.standard_normal((rows, cols))
+            + 1j * rng.standard_normal((rows, cols))
+        ).astype(np.complex64)
+        cross_zero = np.zeros((rows, cols), dtype=np.complex64)
+
+        result = halpha.decompose(co, cross_zero)
+        margin = 10
+        interior_H = result['entropy'][margin:-margin, margin:-margin]
+
+        np.testing.assert_allclose(
+            interior_H,
+            0.0,
+            atol=0.02,
+            err_msg=(
+                "Pure co-pol input (cross_pol=0) must produce entropy≈0 in "
+                "the interior. Non-zero entropy means the eigenvector "
+                "decomposition is returning spurious secondary eigenvalues "
+                "for a rank-1 matrix."
+            ),
+        )
+
+    def test_zero_cross_pol_gives_zero_alpha(self):
+        """Zero cross-pol must yield alpha ≈ 0° (surface / odd-bounce scattering).
+
+        When only co-pol is present, the dominant eigenvector is aligned with
+        the co-pol channel, giving an alpha angle near 0°.  Values far from 0°
+        indicate the eigenvector computation is assigning the wrong scattering
+        mechanism.
+        """
+        halpha = DualPolHAlpha(window_size=7)
+        rows, cols = 64, 64
+        rng = np.random.default_rng(2)
+        co = (
+            rng.standard_normal((rows, cols))
+            + 1j * rng.standard_normal((rows, cols))
+        ).astype(np.complex64)
+        cross_zero = np.zeros((rows, cols), dtype=np.complex64)
+
+        result = halpha.decompose(co, cross_zero)
+        margin = 10
+        mean_alpha = np.mean(
+            result['alpha'][margin:-margin, margin:-margin]
+        )
+
+        assert mean_alpha < 5.0, (
+            f"Alpha = {mean_alpha:.2f}° for pure co-pol input; expected < 5°. "
+            "Check that the dominant eigenvector is correctly identified as the "
+            "co-pol channel direction."
+        )
+
     def test_to_rgb_shape(self, synthetic_dual_pol):
-        """to_rgb() returns (rows, cols, 3) array."""
+        """to_rgb() returns (3, rows, cols) channels-first array."""
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
         components = halpha.decompose(co, cross)
         rgb = halpha.to_rgb(components)
-        assert rgb.shape == (co.shape[0], co.shape[1], 3)
+        assert rgb.shape == (3, co.shape[0], co.shape[1])
 
     @pytest.mark.integration
     def test_to_rgb_dtype(self, synthetic_dual_pol):
@@ -231,13 +350,37 @@ class TestDualPolHAlphaLevel3:
         assert rgb.max() <= 1.0 + 1e-6, f"RGB max = {rgb.max()}"
 
     @pytest.mark.integration
-    def test_to_rgb_not_all_zero(self, synthetic_dual_pol):
-        """to_rgb() has non-trivial output (not all zeros)."""
+    def test_to_rgb_all_channels_active(self, synthetic_dual_pol):
+        """to_rgb() must produce meaningful, distinct values in all three channels.
+
+        The old 'max > 0' check passes with a single non-zero pixel in any
+        channel.  This test requires each channel to have non-trivial range
+        and that the channels are not all identical (which would indicate
+        the RGB mapping is collapsed to grayscale).
+        """
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
         components = halpha.decompose(co, cross)
         rgb = halpha.to_rgb(components)
-        assert rgb.max() > 0.0, "RGB composite is entirely black"
+
+        for ch, name in enumerate(('R', 'G', 'B')):
+            channel = rgb[:, :, ch]
+            ch_range = channel.max() - channel.min()
+            assert ch_range > 0.05, (
+                f"Channel {name} (index {ch}) has near-zero range "
+                f"({ch_range:.4f}) — the H-Alpha→RGB mapping is not "
+                "producing distinct channel content"
+            )
+
+        # Channels must not be identical — that would mean the RGB mapping
+        # is effectively grayscale
+        assert not np.allclose(rgb[:, :, 0], rgb[:, :, 1], atol=1e-3), (
+            "R and G channels are identical — to_rgb() may be copying one "
+            "component to all three channels"
+        )
+        assert not np.allclose(rgb[:, :, 0], rgb[:, :, 2], atol=1e-3), (
+            "R and B channels are identical"
+        )
 
 
 # ---------------------------------------------------------------------------

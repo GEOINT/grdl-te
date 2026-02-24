@@ -89,7 +89,11 @@ def synthetic_image_pair():
         [rows * 0.5, cols * 0.5],
         [rows * 0.3, cols * 0.7],
     ], dtype=np.float64)
-    pts_moving = (matrix @ pts_fixed.T).T + offset
+    # scipy.ndimage.affine_transform uses inverse mapping:
+    #   moving[r, c] = fixed[matrix @ [r, c] + offset]
+    # So the moving coordinate for fixed point p_f is:
+    #   p_m = matrix^{-1} @ (p_f - offset) = matrix.T @ (p_f - offset)
+    pts_moving = (matrix.T @ (pts_fixed - offset).T).T
 
     return fixed, moving, pts_fixed, pts_moving, matrix, offset
 
@@ -139,7 +143,15 @@ class TestProjectiveLevel2:
     """Validate transform estimation accuracy."""
 
     def test_transform_close_to_identity_for_small_warp(self, synthetic_image_pair):
-        """Recovered transform should be close to the known transformation."""
+        """Recovered rotation must match the known 2° rotation to within 0.05.
+
+        ProjectiveCoRegistration returns H in moving→fixed convention:
+            fixed_coord ≈ H @ homogeneous(moving_coord)
+        scipy.ndimage.affine_transform uses the same moving→fixed convention
+        (moving[r,c] = fixed[matrix @ [r,c] + offset]), so true_matrix IS
+        the moving→fixed transform.  H[:2,:2] must agree with true_matrix to
+        within 0.05 (≈ 3° angular error) under noiseless conditions.
+        """
         fixed, moving, pts_f, pts_m, true_matrix, true_offset = synthetic_image_pair
         coreg = ProjectiveCoRegistration(
             control_points_fixed=pts_f,
@@ -147,25 +159,69 @@ class TestProjectiveLevel2:
         )
         result = coreg.estimate(fixed, moving)
 
-        # The top-left 2x2 of the 3x3 homography should be close to true_matrix
+        # H is already moving→fixed; no inversion needed
         H = result.transform_matrix
-        recovered_2x2 = H[:2, :2] / H[2, 2] if abs(H[2, 2]) > 1e-10 else H[:2, :2]
-        # Allow tolerance for the estimation
+        scale = H[2, 2] if abs(H[2, 2]) > 1e-10 else 1.0
+        recovered_2x2 = H[:2, :2] / scale
+
         diff = np.abs(recovered_2x2 - true_matrix)
-        assert np.all(diff < 0.5), (
-            f"Transform 2x2 block differs from truth by up to {diff.max():.4f}"
+        assert np.all(diff < 0.05), (
+            f"H[:2,:2] differs from true_matrix by up to {diff.max():.4f} "
+            "(tolerance 0.05 ≈ 3° angular error). With noiseless control "
+            "points this should be near-zero. Check the homography solver."
+        )
+
+    def test_translation_recovery(self, synthetic_image_pair):
+        """H must reproduce the known translation offset of (3.0, 3.0) pixels.
+
+        H is in moving→fixed convention.  The fixture encodes the offset as
+        the additive term in fixed_coord = matrix @ moving_coord + offset,
+        so H[0,2] ≈ offset[0] (row offset) and H[1,2] ≈ offset[1] (col
+        offset).  No inversion is needed; the translation lives directly in H.
+        Tolerance is 0.5 px — noiseless control points should achieve < 0.1 px.
+        """
+        fixed, moving, pts_f, pts_m, _, true_offset = synthetic_image_pair
+        coreg = ProjectiveCoRegistration(
+            control_points_fixed=pts_f,
+            control_points_moving=pts_m,
+        )
+        result = coreg.estimate(fixed, moving)
+
+        # H is moving→fixed; translation is directly in H[:2, 2]
+        H = result.transform_matrix
+        scale = H[2, 2] if abs(H[2, 2]) > 1e-10 else 1.0
+        recovered_row_offset = H[0, 2] / scale   # row offset (true_offset[0])
+        recovered_col_offset = H[1, 2] / scale   # col offset (true_offset[1])
+
+        assert abs(recovered_row_offset - true_offset[0]) < 0.5, (
+            f"Row translation {recovered_row_offset:.4f} != "
+            f"true {true_offset[0]:.4f} (tolerance 0.5 px)"
+        )
+        assert abs(recovered_col_offset - true_offset[1]) < 0.5, (
+            f"Col translation {recovered_col_offset:.4f} != "
+            f"true {true_offset[1]:.4f} (tolerance 0.5 px)"
         )
 
     def test_rms_residual_small(self, synthetic_image_pair):
-        """RMS residual of control points should be small."""
+        """RMS control-point residual must be sub-pixel for noiseless inputs.
+
+        The control points are derived analytically from the true transform
+        (pts_moving = matrix @ pts_fixed + offset) with zero added noise.
+        Sub-pixel residual (< 0.5 px) is the correct expectation here.
+
+        The old threshold of 5.0 pixels (≈ 2% of image width) would pass
+        even for a poorly-conditioned solve that introduced significant error.
+        """
         fixed, moving, pts_f, pts_m, _, _ = synthetic_image_pair
         coreg = ProjectiveCoRegistration(
             control_points_fixed=pts_f,
             control_points_moving=pts_m,
         )
         result = coreg.estimate(fixed, moving)
-        assert result.residual_rms < 5.0, (
-            f"RMS error {result.residual_rms:.4f} too large"
+        assert result.residual_rms < 0.5, (
+            f"RMS residual {result.residual_rms:.4f} px exceeds 0.5 px. "
+            "With analytically-perfect (noiseless) control points the solver "
+            "should achieve near-zero residual. Check the DLT or SVD solve."
         )
 
 
@@ -190,7 +246,15 @@ class TestProjectiveLevel3:
 
     @pytest.mark.integration
     def test_apply_reduces_error(self, synthetic_image_pair):
-        """Aligned image should be closer to fixed than the original moving."""
+        """Alignment must reduce MSE by at least 50% in the image interior.
+
+        The fixture warps the fixed image by only 2° rotation + 3px translation
+        so a correct alignment should come close to perfect reconstruction.
+        'Any improvement' (error_after < error_before) is too weak — a 0.1%
+        MSE reduction satisfies it trivially.  We require at least 50% reduction
+        to confirm the alignment is actually working, not just accidentally
+        marginally better.
+        """
         fixed, moving, pts_f, pts_m, _, _ = synthetic_image_pair
         coreg = ProjectiveCoRegistration(
             control_points_fixed=pts_f,
@@ -199,14 +263,16 @@ class TestProjectiveLevel3:
         result = coreg.estimate(fixed, moving)
         aligned = coreg.apply(moving, result)
 
-        # Compare center region to avoid border effects
         margin = 30
         center = slice(margin, -margin), slice(margin, -margin)
         error_before = np.mean((fixed[center] - moving[center]) ** 2)
         error_after = np.mean((fixed[center] - aligned[center]) ** 2)
-        assert error_after < error_before, (
-            f"Alignment did not improve: before={error_before:.6f}, "
-            f"after={error_after:.6f}"
+
+        assert error_after < error_before * 0.5, (
+            f"Alignment reduced MSE by only "
+            f"{(1 - error_after / error_before) * 100:.1f}% "
+            f"(before={error_before:.6f}, after={error_after:.6f}). "
+            "Expected > 50% reduction for a 2° warp with perfect control points."
         )
 
     @pytest.mark.integration

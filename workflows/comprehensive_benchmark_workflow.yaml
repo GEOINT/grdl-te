@@ -1,12 +1,10 @@
 schema_version: "2.0"
 name: "GRDL Comprehensive Benchmark"
-version: "1.0.0"
+version: "2.0.0"
 description: >-
+  Full GRDL processing pipeline: IO → filtering → intensity →
+  decomposition → SAR processing → detection → orthorectification.
   Exercises every available image processing component in GRDL.
-  Accepts a complex SAR chip as input and fans out into parallel
-  branches that cover speckle filtering, phase analysis, rank
-  filters, linear filters, statistical texture, intensity
-  transforms, and contrast stretching.
 
 state: "draft"
 
@@ -125,7 +123,77 @@ steps:
     params:
       kernel_size: 5
 
-  # ── Stage 4: Contrast stretch (finalization) ───────────────────────────
+  # ── Stage 3b: Polarimetric decomposition ──────────────────────────────
+  - processor: grdl.image_processing.decomposition.DualPolHAlpha
+    version: "1.0.0"
+    id: dual_pol_halpha
+    depends_on: [despeckle]
+    phase: global_processing
+    params:
+      window_size: 7
+
+  # ── Stage 3c: SAR sub-aperture processing ─────────────────────────────
+  - processor: grdl.image_processing.sar.MultilookDecomposition
+    version: "1.0.0"
+    id: multilook_2x2
+    depends_on: [despeckle]
+    phase: global_processing
+    params:
+      looks_rg: 2
+      looks_az: 2
+
+  - processor: grdl.image_processing.sar.CSIProcessor
+    version: "0.2.0"
+    id: csi_rgb
+    depends_on: [despeckle]
+    phase: global_processing
+    params:
+      overlap: 0.1
+      deweight: true
+      normalize: true
+
+  # ── Stage 4: CFAR detection on dB branch ──────────────────────────────
+  - processor: grdl.image_processing.detection.cfar.CACFARDetector
+    version: "1.0.0"
+    id: cfar_ca
+    depends_on: [to_db]
+    phase: global_processing
+    params:
+      guard_cells: 3
+      training_cells: 12
+      pfa: 0.001
+
+  - processor: grdl.image_processing.detection.cfar.GOCFARDetector
+    version: "1.0.0"
+    id: cfar_go
+    depends_on: [to_db]
+    phase: global_processing
+    params:
+      guard_cells: 3
+      training_cells: 12
+      pfa: 0.001
+
+  - processor: grdl.image_processing.detection.cfar.SOCFARDetector
+    version: "1.0.0"
+    id: cfar_so
+    depends_on: [to_db]
+    phase: global_processing
+    params:
+      guard_cells: 3
+      training_cells: 12
+      pfa: 0.001
+
+  - processor: grdl.image_processing.detection.cfar.OSCFARDetector
+    version: "1.0.0"
+    id: cfar_os
+    depends_on: [to_db]
+    phase: global_processing
+    params:
+      guard_cells: 3
+      training_cells: 12
+      pfa: 0.001
+
+  # ── Stage 5: Contrast stretch (finalization) ───────────────────────────
   - processor: grdl.image_processing.intensity.PercentileStretch
     version: "1.0.0"
     id: percentile_stretch
@@ -134,3 +202,64 @@ steps:
     params:
       plow: 2.0
       phigh: 98.0
+
+  # ── Stage 6: Ortho pipeline (finalization) ────────────────────────────
+  - processor: grdl.image_processing.ortho.OrthoPipeline
+    version: "1.0.0"
+    id: ortho_pipeline
+    depends_on: [percentile_stretch]
+    phase: finalization
+    params:
+      interpolation: bilinear
+
+  # ── Image Formation branch (CPHD input, conditional) ─────────────────
+  - processor: grdl.image_processing.sar.image_formation.CollectionGeometry
+    version: "1.0.0"
+    id: collection_geometry
+    phase: global_processing
+    params: {}
+
+  - processor: grdl.image_processing.sar.image_formation.PolarGrid
+    version: "1.0.0"
+    id: polar_grid
+    depends_on: [collection_geometry]
+    phase: global_processing
+    params: {}
+
+  - processor: grdl.image_processing.sar.image_formation.PolarFormatAlgorithm
+    version: "1.0.0"
+    id: pfa_form
+    depends_on: [polar_grid]
+    phase: global_processing
+    params: {}
+
+  - processor: grdl.image_processing.sar.image_formation.RangeDopplerAlgorithm
+    version: "1.0.0"
+    id: rda_form
+    depends_on: [collection_geometry]
+    phase: global_processing
+    params: {}
+
+  - processor: grdl.image_processing.sar.image_formation.StripmapPFA
+    version: "1.0.0"
+    id: stripmap_pfa
+    depends_on: [polar_grid]
+    phase: global_processing
+    params:
+      n_subapertures: 4
+
+  - processor: grdl.image_processing.sar.image_formation.FastBackProjection
+    version: "1.0.0"
+    id: ffbp
+    depends_on: [collection_geometry]
+    phase: global_processing
+    params:
+      n_subapertures: 4
+
+  - processor: grdl.image_processing.sar.image_formation.SubaperturePartitioner
+    version: "1.0.0"
+    id: subaperture_partition
+    depends_on: [collection_geometry]
+    phase: global_processing
+    params:
+      n_subapertures: 4

@@ -61,6 +61,15 @@ markers = [
     "image_formation: SAR image formation tests",
     "ortho: Orthorectification tests",
     "coregistration: CoRegistration tests",
+    "cphd: CPHD format tests",
+    "crsd: CRSD format tests",
+    "sidd: SIDD format tests",
+    "sentinel1: Sentinel-1 SLC tests",
+    "aster: ASTER L1T tests",
+    "biomass: BIOMASS L1 tests",
+    "elevation: Elevation model tests",
+    "terrasar: TerraSAR-X/TanDEM-X tests",
+    "interpolation: Interpolation algorithm tests",
 ]
 
 [tool.setuptools.packages.find]

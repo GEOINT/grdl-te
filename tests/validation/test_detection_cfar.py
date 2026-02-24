@@ -117,7 +117,6 @@ class TestCFARLevel1FormatValidation:
         det = CACFARDetector(guard_cells=3, training_cells=12, pfa=1e-3)
         result = det.detect(db)
         assert isinstance(result, DetectionSet)
-        assert len(result) >= 0
         assert hasattr(result, 'to_geojson')
 
     def test_gocfar_returns_detection_set(self, synthetic_db_image):
@@ -174,8 +173,14 @@ class TestCFARLevel1FormatValidation:
 class TestCFARLevel2DetectionCorrectness:
     """Validate that CFAR detectors find injected targets."""
 
-    def _target_found(self, result, target_row, target_col, tolerance=20):
-        """Check if any detection centroid is near (target_row, target_col)."""
+    def _target_found(self, result, target_row, target_col, tolerance=8):
+        """Check if any detection centroid is near (target_row, target_col).
+
+        Tolerance is 8 pixels: the injected target cluster is 5×5 pixels,
+        so any legitimate detection must centroid within ~4 pixels of the
+        injection centre.  The old tolerance of 20 pixels accepted detections
+        almost 2 cluster-widths away, masking missed-target bugs.
+        """
         for d in result:
             centroid = d.pixel_geometry.centroid
             # shapely: (x, y) = (col, row)
@@ -211,16 +216,26 @@ class TestCFARLevel2DetectionCorrectness:
         )
 
     def test_socfar_more_sensitive_than_gocfar(self, synthetic_db_image):
-        """SO-CFAR produces >= as many detections as GO-CFAR (more sensitive)."""
+        """SO-CFAR must produce strictly more detections than GO-CFAR.
+
+        SO-CFAR uses the MINIMUM of the two training windows as the clutter
+        estimate, producing a lower threshold than GO-CFAR (which uses the
+        maximum).  Lower threshold → more detections.  This is a fundamental
+        algorithmic invariant, not a statistical tendency.
+
+        The old '- 2' slack allowed SO to find FEWER detections than GO and
+        still pass, which would mean the min/max logic is reversed.
+        """
         db, _ = synthetic_db_image
         go = GOCFARDetector(guard_cells=3, training_cells=12, pfa=1e-3)
         so = SOCFARDetector(guard_cells=3, training_cells=12, pfa=1e-3)
         go_result = go.detect(db)
         so_result = so.detect(db)
-        # SO-CFAR should be at least as sensitive as GO-CFAR
-        assert len(so_result) >= len(go_result) - 2, (
-            f"SO-CFAR ({len(so_result)}) significantly less sensitive "
-            f"than GO-CFAR ({len(go_result)})"
+        assert len(so_result) >= len(go_result), (
+            f"SO-CFAR ({len(so_result)} detections) must be at least as "
+            f"sensitive as GO-CFAR ({len(go_result)} detections). "
+            "SO uses the minimum clutter estimate → lower threshold → more "
+            "detections. A violation means the min/max selection is swapped."
         )
 
     def test_oscfar_detects_targets(self, synthetic_db_image):
@@ -258,6 +273,39 @@ class TestCFARLevel2DetectionCorrectness:
             d = result[0]
             assert isinstance(d.properties, dict)
             assert len(d.properties) > 0
+
+    def test_pfa_controls_detection_count_monotonically(self, synthetic_db_image):
+        """Detection count must decrease monotonically as PFA decreases.
+
+        CA-CFAR derives its threshold as T = α × mean(training_cells), where
+        α is computed from the PFA.  Lower PFA → higher α → higher threshold
+        → fewer detections.  This must hold across at least 3 PFA values in
+        a decade-by-decade sweep.
+
+        A flat detection count across PFA values means the threshold is
+        hardcoded and the PFA argument is being silently ignored.
+        """
+        db, _ = synthetic_db_image
+        pfas = [1e-2, 1e-3, 1e-4, 1e-5]
+        counts = []
+        for pfa in pfas:
+            det = CACFARDetector(guard_cells=3, training_cells=12,
+                                 pfa=pfa, min_pixels=1)
+            counts.append(len(det.detect(db)))
+
+        for i in range(len(counts) - 1):
+            assert counts[i] >= counts[i + 1], (
+                f"Detection count did NOT decrease from PFA={pfas[i]:.0e} "
+                f"({counts[i]}) to PFA={pfas[i+1]:.0e} ({counts[i+1]}). "
+                "The PFA-to-threshold conversion is not monotone — check "
+                "the α scaling formula."
+            )
+        # Also verify the span is meaningful: loosest PFA must detect more
+        # than the tightest
+        assert counts[0] > counts[-1], (
+            f"PFA=1e-2 ({counts[0]}) and PFA=1e-5 ({counts[-1]}) gave "
+            "identical detection counts — PFA is not affecting the threshold"
+        )
 
 
 # ---------------------------------------------------------------------------

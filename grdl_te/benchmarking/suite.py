@@ -357,8 +357,7 @@ def run_decomposition_benchmarks(
             _co, _cross = co_pol, cross_pol  # capture for lambda
             r = _bench(
                 f"DualPolHAlpha.decompose.w{ws}.{sz}", halpha.decompose,
-                setup=lambda _c=_co, _x=_cross: ((_c, _x), {}),
-                version="1.0.0", **kw,
+                setup=lambda _c=_co, _x=_cross: ((_c, _x), {}), **kw,
             )
             if r:
                 results.append(r)
@@ -367,7 +366,7 @@ def run_decomposition_benchmarks(
         ha_components = halpha.decompose(co_pol, cross_pol)
         r = _bench(
             f"DualPolHAlpha.to_rgb.{sz}", halpha.to_rgb,
-            setup=lambda: ((ha_components,), {}), version="1.0.0", **kw,
+            setup=lambda: ((ha_components,), {}), **kw,
         )
         if r:
             results.append(r)
@@ -481,7 +480,7 @@ def run_detection_benchmarks(
                 [(100, 200), (300, 400), (500, 600)]
             )
         ]
-        ds = DetectionSet(detections=detections, detector_name="CA-CFAR")
+        ds = DetectionSet(detections=detections, detector_name="CA-CFAR", detector_version="1.0.0")
 
         r = _bench(f"DetectionSet.to_geojson.{sz}", ds.to_geojson,
                    version="1.0.0", **kw)
@@ -494,7 +493,7 @@ def run_detection_benchmarks(
     try:
         from grdl.image_processing.detection import Fields
 
-        r = _bench("Fields.lookup.SNR", lambda: Fields.SNR,
+        r = _bench("Fields.lookup.SNR", lambda: Fields,
                    version="1.0.0", **kw)
         if r:
             results.append(r)
@@ -892,9 +891,9 @@ def _run_real_data_io(
     #   suite.py -> benchmarking/ -> grdl_te/ -> grdl-te/ -> data/
     _data_dir = Path(__file__).resolve().parent.parent.parent / "data"
 
-    # ------------------------------------------------------------------
-    # SICD  (umbra/  — pattern: *.nitf or *.ntf per README)
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # Group 1: umbra/ — SICDReader + NITFReader (shared NITF data)
+    # ==================================================================
     umbra_dir = _data_dir / "umbra"
     sar_path = (_find_data_file(umbra_dir, "*.nitf")
                 or _find_data_file(umbra_dir, "*.ntf"))
@@ -925,12 +924,29 @@ def _run_real_data_io(
 
         except ImportError:
             print("  SKIP  SICDReader benchmarks (import failed)")
+
+        # NITFReader on the same umbra NITF file
+        try:
+            from grdl.IO.nitf import NITFReader
+
+            def _nitf_read_full():
+                with _suppress_stderr(), NITFReader(sar_path) as reader:
+                    return reader.read_full()
+
+            r = _bench("NITFReader.read_full.real_data",
+                        _nitf_read_full, **kw)
+            if r:
+                results.append(r)
+
+        except ImportError:
+            print("  SKIP  NITFReader benchmarks (import failed)")
     else:
         print("  SKIP  SICDReader benchmarks (data file not found)")
+        print("  SKIP  NITFReader benchmarks (data file not found)")
 
-    # ------------------------------------------------------------------
-    # VIIRS  (viirs/  — pattern: V?P09GA*.h5 per README)
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # Group 2: viirs/ — VIIRSReader + HDF5Reader (shared HDF5 data)
+    # ==================================================================
     viirs_dir = _data_dir / "viirs"
     vpath = (_find_data_file(viirs_dir, "V?P09GA*.h5")
              or _find_data_file(viirs_dir, "V?P09GA*.hdf5"))
@@ -949,15 +965,48 @@ def _run_real_data_io(
 
         except (ImportError, Exception) as exc:
             print(f"  SKIP  VIIRSReader benchmarks ({exc})")
+
+        # HDF5Reader on the same VIIRS HDF5 file
+        try:
+            from grdl.IO.hdf5 import HDF5Reader
+
+            def _hdf5_read_full_real():
+                with HDF5Reader(vpath) as reader:
+                    return reader.read_full()
+
+            r = _bench("HDF5Reader.read_full.real_data",
+                        _hdf5_read_full_real, **kw)
+            if r:
+                results.append(r)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  HDF5Reader real data benchmarks ({exc})")
     else:
         print("  SKIP  VIIRSReader benchmarks (data files not found)")
+        print("  SKIP  HDF5Reader real data benchmarks (data files not found)")
 
-    # ------------------------------------------------------------------
-    # Sentinel-2 JP2  (sentinel2/  — pattern per README)
-    # ------------------------------------------------------------------
+    # ==================================================================
+    # Group 3: sentinel2/ — Sentinel2Reader + JP2Reader (shared JP2 data)
+    # ==================================================================
     sentinel2_dir = _data_dir / "sentinel2"
     jp2_path = _find_sentinel2_jp2(sentinel2_dir)
     if jp2_path:
+        try:
+            from grdl.IO.eo import Sentinel2Reader
+
+            def _sentinel2_read_full():
+                with Sentinel2Reader(jp2_path) as reader:
+                    return reader.read_full()
+
+            r = _bench("Sentinel2Reader.read_full.real_data",
+                        _sentinel2_read_full, **kw)
+            if r:
+                results.append(r)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  Sentinel2Reader benchmarks ({exc})")
+
+        # JP2Reader on the same Sentinel-2 JP2 file
         try:
             from grdl.IO.jpeg2000 import JP2Reader
 
@@ -973,32 +1022,308 @@ def _run_real_data_io(
         except (ImportError, Exception) as exc:
             print(f"  SKIP  JP2Reader benchmarks ({exc})")
     else:
+        print("  SKIP  Sentinel2Reader benchmarks (data files not found)")
         print("  SKIP  JP2Reader benchmarks (data files not found)")
 
-    # ------------------------------------------------------------------
-    # NITF  (any *.nitf / *.ntf across data/ — pattern per README)
-    # ------------------------------------------------------------------
-    try:
-        from grdl.IO.nitf import NITFReader
+    # ==================================================================
+    # Group 4: landsat/ — GeoTIFFReader (real GeoTIFF data)
+    # ==================================================================
+    landsat_dir = _data_dir / "landsat"
+    tif_path = _find_data_file(landsat_dir, "LC0[89]*_SR_B*.TIF")
+    if tif_path:
+        try:
+            from grdl.IO.geotiff import GeoTIFFReader
 
-        nitf_paths = (sorted(_data_dir.glob("**/*.nitf"))
-                      + sorted(_data_dir.glob("**/*.ntf")))
-        if nitf_paths:
-            npath = nitf_paths[0]
-
-            def _nitf_read_full():
-                with _suppress_stderr(), NITFReader(npath) as reader:
+            def _geotiff_read_full_real():
+                with GeoTIFFReader(tif_path) as reader:
                     return reader.read_full()
 
-            r = _bench("NITFReader.read_full.real_data",
-                        _nitf_read_full, **kw)
+            r = _bench("GeoTIFFReader.read_full.real_data",
+                        _geotiff_read_full_real, **kw)
             if r:
                 results.append(r)
-        else:
-            print("  SKIP  NITFReader benchmarks (data files not found)")
 
-    except ImportError:
-        print("  SKIP  NITFReader benchmarks (import failed)")
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  GeoTIFFReader real data benchmarks ({exc})")
+    else:
+        print("  SKIP  GeoTIFFReader real data benchmarks (data files not found)")
+
+    # ==================================================================
+    # Group 5: cphd/ — CPHDReader
+    # ==================================================================
+    cphd_dir = _data_dir / "cphd"
+    cphd_path = _find_data_file(cphd_dir, "*.cphd")
+    if cphd_path:
+        try:
+            from grdl.IO.sar import CPHDReader
+
+            def _cphd_read_full():
+                with CPHDReader(cphd_path) as reader:
+                    return reader.read_full()
+
+            r = _bench("CPHDReader.read_full.real_data",
+                        _cphd_read_full, **kw)
+            if r:
+                results.append(r)
+
+            def _cphd_read_pvp():
+                with CPHDReader(cphd_path) as reader:
+                    return reader.read_pvp()
+
+            r = _bench("CPHDReader.read_pvp.real_data",
+                        _cphd_read_pvp, **kw)
+            if r:
+                results.append(r)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  CPHDReader benchmarks ({exc})")
+    else:
+        print("  SKIP  CPHDReader benchmarks (data files not found)")
+
+    # ==================================================================
+    # Group 6: crsd/ — CRSDReader
+    # ==================================================================
+    crsd_dir = _data_dir / "crsd"
+    crsd_path = _find_data_file(crsd_dir, "*.crsd")
+    if crsd_path:
+        try:
+            from grdl.IO.sar import CRSDReader
+
+            def _crsd_read_full():
+                with CRSDReader(crsd_path) as reader:
+                    return reader.read_full()
+
+            r = _bench("CRSDReader.read_full.real_data",
+                        _crsd_read_full, **kw)
+            if r:
+                results.append(r)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  CRSDReader benchmarks ({exc})")
+    else:
+        print("  SKIP  CRSDReader benchmarks (data files not found)")
+
+    # ==================================================================
+    # Group 7: sidd/ — SIDDReader
+    # ==================================================================
+    sidd_dir = _data_dir / "sidd"
+    sidd_path = _find_data_file(sidd_dir, "*.nitf")
+    if sidd_path:
+        try:
+            from grdl.IO.sar import SIDDReader
+
+            def _sidd_read_full():
+                with _suppress_stderr(), SIDDReader(sidd_path) as reader:
+                    return reader.read_full()
+
+            r = _bench("SIDDReader.read_full.real_data",
+                        _sidd_read_full, **kw)
+            if r:
+                results.append(r)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  SIDDReader benchmarks ({exc})")
+    else:
+        print("  SKIP  SIDDReader benchmarks (data files not found)")
+
+    # ==================================================================
+    # Group 8: sentinel1/ — Sentinel1SLCReader
+    # ==================================================================
+    sentinel1_dir = _data_dir / "sentinel1"
+    s1_path = _find_data_file(sentinel1_dir, "*.SAFE")
+    if s1_path:
+        try:
+            from grdl.IO.sar import Sentinel1SLCReader
+
+            def _s1_read_full():
+                with Sentinel1SLCReader(s1_path) as reader:
+                    return reader.read_full()
+
+            r = _bench("Sentinel1SLCReader.read_full.real_data",
+                        _s1_read_full, **kw)
+            if r:
+                results.append(r)
+
+            def _s1_read_chip():
+                with Sentinel1SLCReader(s1_path) as reader:
+                    s = reader.get_shape()
+                    cx, cy = s[0] // 2, s[1] // 2
+                    return reader.read_chip(cx - 512, cx + 512,
+                                            cy - 512, cy + 512)
+
+            r = _bench("Sentinel1SLCReader.read_chip.1024x1024.real_data",
+                        _s1_read_chip, **kw)
+            if r:
+                results.append(r)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  Sentinel1SLCReader benchmarks ({exc})")
+    else:
+        print("  SKIP  Sentinel1SLCReader benchmarks (data files not found)")
+
+    # ==================================================================
+    # Group 9: aster/ — ASTERReader
+    # ==================================================================
+    aster_dir = _data_dir / "aster"
+    aster_path = _find_data_file(aster_dir, "AST_L1T*.hdf")
+    if aster_path:
+        try:
+            from grdl.IO.multispectral import ASTERReader
+
+            def _aster_read_full():
+                with ASTERReader(aster_path) as reader:
+                    return reader.read_full()
+
+            r = _bench("ASTERReader.read_full.real_data",
+                        _aster_read_full, **kw)
+            if r:
+                results.append(r)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  ASTERReader benchmarks ({exc})")
+    else:
+        print("  SKIP  ASTERReader benchmarks (data files not found)")
+
+    # ==================================================================
+    # Group 10: biomass/ — BIOMASSL1Reader
+    # ==================================================================
+    biomass_dir = _data_dir / "biomass"
+    biomass_path = _find_data_file(biomass_dir, "BIO_S2_*.tif")
+    if biomass_path:
+        try:
+            from grdl.IO.sar import BIOMASSL1Reader
+
+            def _biomass_read_full():
+                with BIOMASSL1Reader(biomass_path) as reader:
+                    return reader.read_full()
+
+            r = _bench("BIOMASSL1Reader.read_full.real_data",
+                        _biomass_read_full, **kw)
+            if r:
+                results.append(r)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  BIOMASSL1Reader benchmarks ({exc})")
+    else:
+        print("  SKIP  BIOMASSL1Reader benchmarks (data files not found)")
+
+    # ==================================================================
+    # Group 11: terrasar/ — TerraSARReader
+    # ==================================================================
+    terrasar_dir = _data_dir / "terrasar"
+    tsx_path = None
+    if terrasar_dir.exists():
+        for candidate in sorted(terrasar_dir.iterdir()):
+            if candidate.is_dir() and (
+                candidate.name.startswith("TSX1_")
+                or candidate.name.startswith("TDX1_")
+            ):
+                tsx_path = candidate
+                break
+        if tsx_path is None:
+            xmls = sorted(terrasar_dir.glob("TSX1_SAR__*.xml"))
+            if xmls:
+                tsx_path = terrasar_dir
+
+    if tsx_path:
+        try:
+            from grdl.IO.sar import TerraSARReader
+
+            def _tsx_read_full():
+                with TerraSARReader(tsx_path) as reader:
+                    return reader.read_full()
+
+            r = _bench("TerraSARReader.read_full.real_data",
+                        _tsx_read_full, **kw)
+            if r:
+                results.append(r)
+
+            def _tsx_read_chip():
+                with TerraSARReader(tsx_path) as reader:
+                    s = reader.get_shape()
+                    cx, cy = s[0] // 2, s[1] // 2
+                    half = min(512, s[0] // 2, s[1] // 2)
+                    return reader.read_chip(cx - half, cx + half,
+                                            cy - half, cy + half)
+
+            r = _bench("TerraSARReader.read_chip.1024x1024.real_data",
+                        _tsx_read_chip, **kw)
+            if r:
+                results.append(r)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  TerraSARReader benchmarks ({exc})")
+    else:
+        print("  SKIP  TerraSARReader benchmarks (data files not found)")
+
+    # ==================================================================
+    # Group 12: SICDWriter roundtrip (write to tmpdir, read back)
+    # ==================================================================
+    if sar_path:
+        try:
+            import copy
+            from grdl.IO.sar import SICDReader, SICDWriter
+
+            with _suppress_stderr(), SICDReader(sar_path) as reader:
+                sicd_meta = reader.metadata
+                shape = reader.get_shape()
+                cx, cy = shape[0] // 2, shape[1] // 2
+                half = min(256, shape[0] // 2, shape[1] // 2)
+                chip = reader.read_chip(cx - half, cx + half,
+                                        cy - half, cy + half)
+
+            # Adapt metadata dimensions to match the chip
+            cm = copy.deepcopy(sicd_meta)
+            cm.rows, cm.cols = chip.shape[0], chip.shape[1]
+            cm.image_data.num_rows = chip.shape[0]
+            cm.image_data.num_cols = chip.shape[1]
+            cm.image_data.first_row = 0
+            cm.image_data.first_col = 0
+            cm.image_data.scp_pixel.row = chip.shape[0] // 2
+            cm.image_data.scp_pixel.col = chip.shape[1] // 2
+            if cm.image_data.full_image:
+                cm.image_data.full_image.num_rows = chip.shape[0]
+                cm.image_data.full_image.num_cols = chip.shape[1]
+
+            tmpdir = Path(tempfile.mkdtemp(prefix="grdl_bench_sicd_"))
+            try:
+                out_path = tmpdir / "bench_sicd.nitf"
+
+                def _sicd_write():
+                    SICDWriter(out_path, metadata=cm).write(chip)
+
+                r = _bench("SICDWriter.write.real_data", _sicd_write, **kw)
+                if r:
+                    results.append(r)
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  SICDWriter benchmarks ({exc})")
+
+    # ==================================================================
+    # Group 13: NITFWriter (write synthetic array)
+    # ==================================================================
+    try:
+        from grdl.IO.nitf import NITFWriter
+
+        tmpdir = Path(tempfile.mkdtemp(prefix="grdl_bench_nitf_"))
+        try:
+            nitf_out = tmpdir / "bench_nitf.nitf"
+            synthetic = np.random.rand(rows, cols).astype(np.float32)
+
+            def _nitf_write():
+                NITFWriter(nitf_out).write(synthetic)
+
+            r = _bench(f"NITFWriter.write.{tags.get('array_size', 'unknown')}",
+                        _nitf_write, **kw)
+            if r:
+                results.append(r)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  NITFWriter benchmarks ({exc})")
 
 
 # ---------------------------------------------------------------------------
@@ -1202,6 +1527,118 @@ def run_geolocation_benchmarks(
 
     except (ImportError, Exception) as exc:
         print(f"  SKIP  NoGeolocation benchmarks ({exc})")
+
+    # --- DTEDElevation ---
+    _data_dir = Path(__file__).resolve().parent.parent.parent / "data"
+    dted_dir = _data_dir / "dted"
+    if dted_dir.exists() and list(dted_dir.glob("**/*.dt?")):
+        try:
+            from grdl.geolocation.elevation import DTEDElevation
+
+            elev = DTEDElevation(str(dted_dir))
+            lat_arr = np.random.uniform(33.0, 35.0, size=10000)
+            lon_arr = np.random.uniform(-119.0, -117.0, size=10000)
+
+            r = _bench(
+                "DTEDElevation.get_elevation.batch10000",
+                elev.get_elevation,
+                setup=lambda: ((lat_arr, lon_arr), {}),
+                **{**kw, "tags": {**tags, "data": "real"}},
+            )
+            if r:
+                results.append(r)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  DTEDElevation benchmarks ({exc})")
+    else:
+        print("  SKIP  DTEDElevation benchmarks (data files not found)")
+
+    # --- GeoTIFFDEM ---
+    dem_path = _find_data_file(_data_dir / "dem", "*.tif")
+    if dem_path:
+        try:
+            from grdl.geolocation.elevation import GeoTIFFDEM
+
+            elev = GeoTIFFDEM(dem_path)
+            lat_arr = np.random.uniform(33.0, 35.0, size=10000)
+            lon_arr = np.random.uniform(-119.0, -117.0, size=10000)
+
+            r = _bench(
+                "GeoTIFFDEM.get_elevation.batch10000",
+                elev.get_elevation,
+                setup=lambda: ((lat_arr, lon_arr), {}),
+                **{**kw, "tags": {**tags, "data": "real"}},
+            )
+            if r:
+                results.append(r)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  GeoTIFFDEM benchmarks ({exc})")
+    else:
+        print("  SKIP  GeoTIFFDEM benchmarks (data files not found)")
+
+    # --- GeoidCorrection ---
+    geoid_path = _find_data_file(_data_dir / "geoid", "*.pgm")
+    if geoid_path:
+        try:
+            from grdl.geolocation.elevation import GeoidCorrection
+
+            geoid = GeoidCorrection(geoid_path)
+            lat_arr = np.random.uniform(33.0, 35.0, size=10000)
+            lon_arr = np.random.uniform(-119.0, -117.0, size=10000)
+
+            r = _bench(
+                "GeoidCorrection.get_undulation.batch10000",
+                geoid.get_undulation,
+                setup=lambda: ((lat_arr, lon_arr), {}),
+                **{**kw, "tags": {**tags, "data": "real"}},
+            )
+            if r:
+                results.append(r)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  GeoidCorrection benchmarks ({exc})")
+    else:
+        print("  SKIP  GeoidCorrection benchmarks (data files not found)")
+
+    # --- Sentinel1SLCGeolocation ---
+    s1_dir = _data_dir / "sentinel1"
+    s1_path = _find_data_file(s1_dir, "*.SAFE")
+    if s1_path:
+        try:
+            from grdl.IO.sar import Sentinel1SLCReader
+            from grdl.geolocation import Sentinel1SLCGeolocation
+
+            with Sentinel1SLCReader(s1_path) as reader:
+                s1_geo = Sentinel1SLCGeolocation.from_reader(reader)
+                s1_shape = reader.get_shape()
+
+            real_kw = dict(store=store, iterations=iterations, warmup=warmup,
+                           tags={**tags, "data": "real"}, module=mod)
+
+            r = _bench(
+                "Sentinel1SLCGeolocation.image_to_latlon.scalar.real_data",
+                s1_geo.image_to_latlon,
+                setup=lambda: ((s1_shape[0] // 2, s1_shape[1] // 2), {}),
+                **real_kw,
+            )
+            if r:
+                results.append(r)
+
+            row_arr = np.random.uniform(0, s1_shape[0], size=1000)
+            col_arr = np.random.uniform(0, s1_shape[1], size=1000)
+            r = _bench(
+                "Sentinel1SLCGeolocation.image_to_latlon.batch1000.real_data",
+                s1_geo.image_to_latlon,
+                setup=lambda: ((row_arr, col_arr), {}), **real_kw,
+            )
+            if r:
+                results.append(r)
+
+        except (ImportError, Exception) as exc:
+            print(f"  SKIP  Sentinel1SLCGeolocation benchmarks ({exc})")
+    else:
+        print("  SKIP  Sentinel1SLCGeolocation benchmarks (data not found)")
 
     return results
 
@@ -1520,6 +1957,325 @@ def run_sar_processing_benchmarks(
     except (ImportError, Exception) as exc:
         print(f"  SKIP  SublookDecomposition benchmarks ({exc})")
 
+    # --- MultilookDecomposition ---
+    try:
+        from grdl.image_processing.sar import MultilookDecomposition
+
+        if sar_path:
+            from grdl.IO.sar import SICDReader as _SICDReader2
+
+            with _SICDReader2(sar_path) as reader:
+                _ml_meta = reader.metadata
+                _ml_shape = reader.get_shape()
+                _cx, _cy = _ml_shape[0] // 2, _ml_shape[1] // 2
+                _half = min(rows // 2, _ml_shape[0] // 2, _ml_shape[1] // 2)
+                _ml_chip = reader.read_chip(_cx - _half, _cx + _half,
+                                            _cy - _half, _cy + _half)
+
+            real_kw2 = dict(store=store, iterations=iterations, warmup=warmup,
+                            tags={**tags, "data": "real"}, module=mod)
+
+            for looks_rg, looks_az in [(2, 2), (3, 3)]:
+                ml = MultilookDecomposition(
+                    metadata=_ml_meta, looks_rg=looks_rg, looks_az=looks_az,
+                )
+                _c = _ml_chip
+                r = _bench(
+                    f"MultilookDecomposition.decompose.{looks_rg}x{looks_az}",
+                    ml.decompose,
+                    setup=lambda _c=_c: ((_c,), {}), **real_kw2,
+                )
+                if r:
+                    results.append(r)
+
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  MultilookDecomposition benchmarks ({exc})")
+
+    # --- CSIProcessor ---
+    try:
+        from grdl.image_processing.sar import CSIProcessor
+
+        if sar_path:
+            from grdl.IO.sar import SICDReader as _SICDReader3
+
+            with _SICDReader3(sar_path) as reader:
+                _csi_meta = reader.metadata
+                _csi_shape = reader.get_shape()
+                _cx, _cy = _csi_shape[0] // 2, _csi_shape[1] // 2
+                _half = min(rows // 2, _csi_shape[0] // 2, _csi_shape[1] // 2)
+                _csi_chip = reader.read_chip(_cx - _half, _cx + _half,
+                                             _cy - _half, _cy + _half)
+
+            csi = CSIProcessor(metadata=_csi_meta)
+            _c = _csi_chip
+            r = _bench("CSIProcessor.apply", csi.apply,
+                        setup=lambda _c=_c: ((_c,), {}),
+                        **dict(store=store, iterations=iterations, warmup=warmup,
+                               tags={**tags, "data": "real"}, module=mod))
+            if r:
+                results.append(r)
+
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  CSIProcessor benchmarks ({exc})")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Interpolation benchmarks
+# ---------------------------------------------------------------------------
+def run_interpolation_benchmarks(
+    store: JSONBenchmarkStore,
+    rows: int,
+    cols: int,
+    iterations: int,
+    warmup: int,
+    tags: Dict[str, str],
+) -> List:
+    """Benchmark interpolation algorithms (synthetic signals)."""
+    _section("Interpolation")
+    sz = tags["array_size"]
+    results = []
+    mod = "interpolation"
+
+    kw = dict(store=store, iterations=iterations, warmup=warmup,
+              tags=tags, module=mod)
+
+    rng = np.random.default_rng(42)
+    n_samples = rows * cols
+
+    # Synthetic bandlimited signal
+    x_old = np.arange(n_samples, dtype=np.float64)
+    y_old = (rng.standard_normal(n_samples)
+             + 1j * rng.standard_normal(n_samples)).astype(np.complex128)
+    x_new = x_old[:-1] + rng.uniform(0.1, 0.9, size=n_samples - 1)
+
+    # --- LanczosInterpolator ---
+    try:
+        from grdl.interpolation import lanczos_interpolator
+
+        for a in (3, 5):
+            interp = lanczos_interpolator(a=a)
+            _xo, _yo, _xn = x_old, y_old, x_new
+            r = _bench(
+                f"LanczosInterpolator.a{a}.{sz}", interp,
+                setup=lambda _xo=_xo, _yo=_yo, _xn=_xn: ((_xo, _yo, _xn), {}),
+                version="1.0.0", **kw,
+            )
+            if r:
+                results.append(r)
+
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  LanczosInterpolator benchmarks ({exc})")
+
+    # --- KaiserSincInterpolator ---
+    try:
+        from grdl.interpolation import windowed_sinc_interpolator
+
+        for kl in (8, 16):
+            interp = windowed_sinc_interpolator(kernel_length=kl, beta=5.0)
+            r = _bench(
+                f"KaiserSincInterpolator.kl{kl}.{sz}", interp,
+                setup=lambda _xo=x_old, _yo=y_old, _xn=x_new: ((_xo, _yo, _xn), {}),
+                version="1.0.0", **kw,
+            )
+            if r:
+                results.append(r)
+
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  KaiserSincInterpolator benchmarks ({exc})")
+
+    # --- LagrangeInterpolator ---
+    try:
+        from grdl.interpolation import lagrange_interpolator
+
+        for order in (3, 5):
+            interp = lagrange_interpolator(order=order)
+            r = _bench(
+                f"LagrangeInterpolator.order{order}.{sz}", interp,
+                setup=lambda _xo=x_old, _yo=y_old, _xn=x_new: ((_xo, _yo, _xn), {}),
+                version="1.0.0", **kw,
+            )
+            if r:
+                results.append(r)
+
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  LagrangeInterpolator benchmarks ({exc})")
+
+    # --- FarrowInterpolator ---
+    try:
+        from grdl.interpolation import farrow_interpolator
+
+        for fo, po in [(4, 3), (8, 5)]:
+            interp = farrow_interpolator(filter_order=fo, poly_order=po)
+            r = _bench(
+                f"FarrowInterpolator.f{fo}_p{po}.{sz}", interp,
+                setup=lambda _xo=x_old, _yo=y_old, _xn=x_new: ((_xo, _yo, _xn), {}),
+                version="1.0.0", **kw,
+            )
+            if r:
+                results.append(r)
+
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  FarrowInterpolator benchmarks ({exc})")
+
+    # --- PolyphaseInterpolator ---
+    try:
+        from grdl.interpolation import polyphase_interpolator
+
+        for kl, nph in [(8, 32), (16, 64)]:
+            interp = polyphase_interpolator(kernel_length=kl, num_phases=nph)
+            r = _bench(
+                f"PolyphaseInterpolator.kl{kl}_ph{nph}.{sz}", interp,
+                setup=lambda _xo=x_old, _yo=y_old, _xn=x_new: ((_xo, _yo, _xn), {}),
+                version="1.0.0", **kw,
+            )
+            if r:
+                results.append(r)
+
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  PolyphaseInterpolator benchmarks ({exc})")
+
+    # --- ThiranDelayFilter ---
+    try:
+        from grdl.interpolation import thiran_delay
+
+        signal_1d = y_old[:1024].real.astype(np.float64)
+        # Thiran stability requires delay >= order - 0.5
+        for delay, order in [(0.7, 1), (3.7, 3)]:
+            r = _bench(
+                f"ThiranDelayFilter.d{delay}_o{order}", thiran_delay,
+                setup=lambda _s=signal_1d, _d=delay, _o=order: ((_s, _d, _o), {}),
+                version="1.0.0", **kw,
+            )
+            if r:
+                results.append(r)
+
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  ThiranDelayFilter benchmarks ({exc})")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# SAR Image Formation benchmarks
+# ---------------------------------------------------------------------------
+def run_image_formation_benchmarks(
+    store: JSONBenchmarkStore,
+    rows: int,
+    cols: int,
+    iterations: int,
+    warmup: int,
+    tags: Dict[str, str],
+) -> List:
+    """Benchmark SAR image formation algorithms (requires CPHD data)."""
+    _section("SAR Image Formation")
+    sz = tags["array_size"]
+    results = []
+    mod = "image_processing.sar.image_formation"
+    kw = dict(store=store, iterations=iterations, warmup=warmup,
+              tags=tags, module=mod)
+
+    _data_dir = Path(__file__).resolve().parent.parent.parent / "data"
+    cphd_dir = _data_dir / "cphd"
+    cphd_path = _find_data_file(cphd_dir, "*.cphd")
+
+    if not cphd_path:
+        print("  SKIP  Image formation benchmarks (CPHD data not found)")
+        return results
+
+    try:
+        from grdl.IO.sar import CPHDReader
+        from grdl.image_processing.sar import (
+            CollectionGeometry, PolarGrid, PolarFormatAlgorithm,
+            SubaperturePartitioner,
+        )
+
+        with CPHDReader(cphd_path) as reader:
+            metadata = reader.typed_metadata
+            phase_data = reader.read_full()
+
+        real_kw = dict(store=store, iterations=iterations, warmup=warmup,
+                       tags={**tags, "data": "real"}, module=mod)
+
+        # CollectionGeometry
+        r = _bench("CollectionGeometry.init.real_data",
+                    lambda: CollectionGeometry(metadata),
+                    version="1.0.0", **real_kw)
+        if r:
+            results.append(r)
+
+        geom = CollectionGeometry(metadata)
+
+        # PolarGrid
+        r = _bench("PolarGrid.init.real_data",
+                    lambda: PolarGrid(geom),
+                    version="1.0.0", **real_kw)
+        if r:
+            results.append(r)
+
+        grid = PolarGrid(geom)
+
+        # PFA
+        pfa = PolarFormatAlgorithm(geometry=geom, grid=grid)
+        _pd = phase_data
+        r = _bench("PolarFormatAlgorithm.form.real_data", pfa.form,
+                    setup=lambda _p=_pd: ((_p,), {}),
+                    version="1.0.0", **real_kw)
+        if r:
+            results.append(r)
+
+        # SubaperturePartitioner
+        part = SubaperturePartitioner(n_subapertures=4)
+        r = _bench("SubaperturePartitioner.partition.real_data",
+                    part.partition,
+                    setup=lambda _p=_pd, _g=geom: ((_p, _g), {}),
+                    version="1.0.0", **real_kw)
+        if r:
+            results.append(r)
+
+        # RDA (may not be compatible with all data)
+        try:
+            from grdl.image_processing.sar import RangeDopplerAlgorithm
+
+            rda = RangeDopplerAlgorithm(geometry=geom)
+            r = _bench("RangeDopplerAlgorithm.form.real_data", rda.form,
+                        setup=lambda _p=_pd: ((_p,), {}),
+                        version="1.0.0", **real_kw)
+            if r:
+                results.append(r)
+        except Exception as exc:
+            print(f"  SKIP  RangeDopplerAlgorithm ({exc})")
+
+        # StripmapPFA
+        try:
+            from grdl.image_processing.sar import StripmapPFA
+
+            spfa = StripmapPFA(geometry=geom, grid=grid, n_subapertures=4)
+            r = _bench("StripmapPFA.form.real_data", spfa.form,
+                        setup=lambda _p=_pd: ((_p,), {}),
+                        version="1.0.0", **real_kw)
+            if r:
+                results.append(r)
+        except Exception as exc:
+            print(f"  SKIP  StripmapPFA ({exc})")
+
+        # FastBackProjection
+        try:
+            from grdl.image_processing.sar import FastBackProjection
+
+            fbp = FastBackProjection(geometry=geom, n_subapertures=4)
+            r = _bench("FastBackProjection.form.real_data", fbp.form,
+                        setup=lambda _p=_pd: ((_p,), {}),
+                        version="1.0.0", **real_kw)
+            if r:
+                results.append(r)
+        except Exception as exc:
+            print(f"  SKIP  FastBackProjection ({exc})")
+
+    except (ImportError, Exception) as exc:
+        print(f"  SKIP  Image formation benchmarks ({exc})")
+
     return results
 
 
@@ -1553,7 +2309,7 @@ def run_workflow_benchmark(
 
     try:
         from grdl_rt.api import load_workflow
-        from grdl_te.benchmarking import ActiveBenchmarkRunner
+        from grdl_te.benchmarking import ActiveBenchmarkRunner, BenchmarkSource
 
         from grdl.IO.sar import SICDReader
         from grdl.data_prep import ChipExtractor
@@ -1572,8 +2328,10 @@ def run_workflow_benchmark(
                 region.col_start, region.col_end,
             )
 
+        source = BenchmarkSource.from_array(chip)
         runner = ActiveBenchmarkRunner(
             workflow=wf,
+            source=source,
             iterations=iterations,
             warmup=warmup,
             store=store,
@@ -1582,7 +2340,7 @@ def run_workflow_benchmark(
 
         print(f"  Running workflow '{wf.name}' "
               f"({iterations} iterations, {warmup} warmup)...")
-        record = runner.run(source=chip, prefer_gpu=True)
+        record = runner.run(prefer_gpu=True)
 
         print(f"  OK    Workflow complete")
         print(f"         wall={record.total_wall_time.mean:.2f}s  "
@@ -1667,6 +2425,8 @@ BENCHMARK_GROUPS = {
     "coregistration": run_coregistration_benchmarks,
     "ortho": run_ortho_benchmarks,
     "sar": run_sar_processing_benchmarks,
+    "interpolation": run_interpolation_benchmarks,
+    "image_formation": run_image_formation_benchmarks,
 }
 
 
