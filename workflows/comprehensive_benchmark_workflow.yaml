@@ -123,20 +123,21 @@ steps:
     params:
       kernel_size: 5
 
-  # ── Stage 3b: Polarimetric decomposition ──────────────────────────────
+  # ── Stage 3b: Polarimetric decomposition (requires dual-pol data) ─────
   - processor: grdl.image_processing.decomposition.DualPolHAlpha
     version: "1.0.0"
     id: dual_pol_halpha
     depends_on: [despeckle]
+    condition: "input_format == 'dual_pol'"
     phase: global_processing
-    params:
-      window_size: 7
+    params: {}
 
-  # ── Stage 3c: SAR sub-aperture processing ─────────────────────────────
+  # ── Stage 3c: SAR sub-aperture processing (requires SICD metadata) ───
   - processor: grdl.image_processing.sar.MultilookDecomposition
     version: "1.0.0"
     id: multilook_2x2
     depends_on: [despeckle]
+    condition: "input_format == 'SICD_with_metadata'"
     phase: global_processing
     params:
       looks_rg: 2
@@ -146,6 +147,7 @@ steps:
     version: "0.2.0"
     id: csi_rgb
     depends_on: [despeckle]
+    condition: "input_format == 'SICD_with_metadata'"
     phase: global_processing
     params:
       overlap: 0.1
@@ -203,11 +205,12 @@ steps:
       plow: 2.0
       phigh: 98.0
 
-  # ── Stage 6: Ortho pipeline (finalization) ────────────────────────────
+  # ── Stage 6: Ortho pipeline (requires reader + geolocation context) ───
   - processor: grdl.image_processing.ortho.OrthoPipeline
     version: "1.0.0"
     id: ortho_pipeline
     depends_on: [percentile_stretch]
+    condition: "input_format == 'SICD_with_metadata'"
     phase: finalization
     params:
       interpolation: bilinear
@@ -216,6 +219,7 @@ steps:
   - processor: grdl.image_processing.sar.image_formation.CollectionGeometry
     version: "1.0.0"
     id: collection_geometry
+    condition: "input_format == 'CPHD'"
     phase: global_processing
     params: {}
 
@@ -223,6 +227,7 @@ steps:
     version: "1.0.0"
     id: polar_grid
     depends_on: [collection_geometry]
+    condition: "input_format == 'CPHD'"
     phase: global_processing
     params: {}
 
@@ -230,6 +235,7 @@ steps:
     version: "1.0.0"
     id: pfa_form
     depends_on: [polar_grid]
+    condition: "input_format == 'CPHD'"
     phase: global_processing
     params: {}
 
@@ -237,6 +243,7 @@ steps:
     version: "1.0.0"
     id: rda_form
     depends_on: [collection_geometry]
+    condition: "input_format == 'CPHD'"
     phase: global_processing
     params: {}
 
@@ -244,6 +251,7 @@ steps:
     version: "1.0.0"
     id: stripmap_pfa
     depends_on: [polar_grid]
+    condition: "input_format == 'CPHD'"
     phase: global_processing
     params:
       n_subapertures: 4
@@ -252,6 +260,7 @@ steps:
     version: "1.0.0"
     id: ffbp
     depends_on: [collection_geometry]
+    condition: "input_format == 'CPHD'"
     phase: global_processing
     params:
       n_subapertures: 4
@@ -260,6 +269,7 @@ steps:
     version: "1.0.0"
     id: subaperture_partition
     depends_on: [collection_geometry]
+    condition: "input_format == 'CPHD'"
     phase: global_processing
     params:
       n_subapertures: 4

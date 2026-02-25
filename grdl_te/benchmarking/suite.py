@@ -132,6 +132,21 @@ def _suppress_stderr():
         os.close(old_fd)
 
 
+@contextlib.contextmanager
+def _suppress_stdout():
+    """Temporarily silence stdout (e.g. verbose image formation prints)."""
+    stdout_fd = 1
+    old_fd = os.dup(stdout_fd)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, stdout_fd)
+        os.close(devnull)
+        yield
+    finally:
+        os.dup2(old_fd, stdout_fd)
+        os.close(old_fd)
+
+
 # ---------------------------------------------------------------------------
 # Filter benchmarks
 # ---------------------------------------------------------------------------
@@ -1068,7 +1083,7 @@ def _run_real_data_io(
 
             def _cphd_read_pvp():
                 with CPHDReader(cphd_path) as reader:
-                    return reader.read_pvp()
+                    return reader.metadata.pvp
 
             r = _bench("CPHDReader.read_pvp.real_data",
                         _cphd_read_pvp, **kw)
@@ -1107,7 +1122,8 @@ def _run_real_data_io(
     # Group 7: sidd/ — SIDDReader
     # ==================================================================
     sidd_dir = _data_dir / "sidd"
-    sidd_path = _find_data_file(sidd_dir, "*.nitf")
+    sidd_path = (_find_data_file(sidd_dir, "*.nitf")
+                 or _find_data_file(sidd_dir, "*.ntf"))
     if sidd_path:
         try:
             from grdl.IO.sar import SIDDReader
@@ -1165,10 +1181,10 @@ def _run_real_data_io(
     # Group 9: aster/ — ASTERReader
     # ==================================================================
     aster_dir = _data_dir / "aster"
-    aster_path = _find_data_file(aster_dir, "AST_L1T*.hdf")
+    aster_path = _find_data_file(aster_dir, "AST_L1T*.tif")
     if aster_path:
         try:
-            from grdl.IO.multispectral import ASTERReader
+            from grdl.IO.ir import ASTERReader
 
             def _aster_read_full():
                 with ASTERReader(aster_path) as reader:
@@ -1188,7 +1204,7 @@ def _run_real_data_io(
     # Group 10: biomass/ — BIOMASSL1Reader
     # ==================================================================
     biomass_dir = _data_dir / "biomass"
-    biomass_path = _find_data_file(biomass_dir, "BIO_S2_*.tif")
+    biomass_path = _find_data_file(biomass_dir, "BIO_S*")
     if biomass_path:
         try:
             from grdl.IO.sar import BIOMASSL1Reader
@@ -1502,33 +1518,6 @@ def run_geolocation_benchmarks(
 
     except (ImportError, Exception) as exc:
         print(f"  SKIP  ConstantElevation benchmarks ({exc})")
-
-    # --- NoGeolocation (trivial identity fallback) ---
-    try:
-        from grdl.geolocation import NoGeolocation
-
-        nogeo = NoGeolocation(shape=(rows, cols))
-
-        r = _bench(
-            f"NoGeolocation.image_to_latlon.scalar.{sz}",
-            nogeo.image_to_latlon,
-            setup=lambda: ((rows // 2, cols // 2), {}), **kw,
-        )
-        if r:
-            results.append(r)
-
-        row_arr = np.random.uniform(0, rows, size=1000)
-        col_arr = np.random.uniform(0, cols, size=1000)
-        r = _bench(
-            f"NoGeolocation.image_to_latlon.batch1000.{sz}",
-            nogeo.image_to_latlon,
-            setup=lambda: ((row_arr, col_arr), {}), **kw,
-        )
-        if r:
-            results.append(r)
-
-    except (ImportError, Exception) as exc:
-        print(f"  SKIP  NoGeolocation benchmarks ({exc})")
 
     # --- DTEDElevation ---
     _data_dir = Path(__file__).resolve().parent.parent.parent / "data"
@@ -2200,51 +2189,53 @@ def run_image_formation_benchmarks(
         real_kw = dict(store=store, iterations=iterations, warmup=warmup,
                        tags={**tags, "data": "real"}, module=mod)
 
-        # CollectionGeometry
-        r = _bench("CollectionGeometry.init.real_data",
-                    lambda: CollectionGeometry(metadata),
-                    version="1.0.0", **real_kw)
-        if r:
-            results.append(r)
+        with _suppress_stdout():
+            # CollectionGeometry
+            r = _bench("CollectionGeometry.init.real_data",
+                        lambda: CollectionGeometry(metadata),
+                        version="1.0.0", **real_kw)
+            if r:
+                results.append(r)
 
-        geom = CollectionGeometry(metadata)
+            geom = CollectionGeometry(metadata)
 
-        # PolarGrid
-        r = _bench("PolarGrid.init.real_data",
-                    lambda: PolarGrid(geom),
-                    version="1.0.0", **real_kw)
-        if r:
-            results.append(r)
+            # PolarGrid
+            r = _bench("PolarGrid.init.real_data",
+                        lambda: PolarGrid(geom),
+                        version="1.0.0", **real_kw)
+            if r:
+                results.append(r)
 
-        grid = PolarGrid(geom)
+            grid = PolarGrid(geom)
 
-        # PFA
-        pfa = PolarFormatAlgorithm(grid=grid)
-        _pd = phase_data
-        _geom = geom
-        r = _bench("PolarFormatAlgorithm.form_image.real_data",
-                    pfa.form_image,
-                    setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
-                    version="1.0.0", **real_kw)
-        if r:
-            results.append(r)
+            # PFA
+            pfa = PolarFormatAlgorithm(grid=grid)
+            _pd = phase_data
+            _geom = geom
+            r = _bench("PolarFormatAlgorithm.form_image.real_data",
+                        pfa.form_image,
+                        setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
+                        version="1.0.0", **real_kw)
+            if r:
+                results.append(r)
 
-        # SubaperturePartitioner
-        r = _bench("SubaperturePartitioner.init.real_data",
-                    lambda _m=metadata: SubaperturePartitioner(metadata=_m),
-                    version="1.0.0", **real_kw)
-        if r:
-            results.append(r)
+            # SubaperturePartitioner
+            r = _bench("SubaperturePartitioner.init.real_data",
+                        lambda _m=metadata: SubaperturePartitioner(metadata=_m),
+                        version="1.0.0", **real_kw)
+            if r:
+                results.append(r)
 
         # RDA (may not be compatible with all data)
         try:
             from grdl.image_processing.sar import RangeDopplerAlgorithm
 
-            rda = RangeDopplerAlgorithm(metadata=metadata)
-            r = _bench("RangeDopplerAlgorithm.form_image.real_data",
-                        rda.form_image,
-                        setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
-                        version="1.0.0", **real_kw)
+            with _suppress_stdout():
+                rda = RangeDopplerAlgorithm(metadata=metadata)
+                r = _bench("RangeDopplerAlgorithm.form_image.real_data",
+                            rda.form_image,
+                            setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
+                            version="1.0.0", **real_kw)
             if r:
                 results.append(r)
         except Exception as exc:
@@ -2254,11 +2245,12 @@ def run_image_formation_benchmarks(
         try:
             from grdl.image_processing.sar import StripmapPFA
 
-            spfa = StripmapPFA(metadata=metadata)
-            r = _bench("StripmapPFA.form_image.real_data",
-                        spfa.form_image,
-                        setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
-                        version="1.0.0", **real_kw)
+            with _suppress_stdout():
+                spfa = StripmapPFA(metadata=metadata)
+                r = _bench("StripmapPFA.form_image.real_data",
+                            spfa.form_image,
+                            setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
+                            version="1.0.0", **real_kw)
             if r:
                 results.append(r)
         except Exception as exc:
@@ -2268,11 +2260,12 @@ def run_image_formation_benchmarks(
         try:
             from grdl.image_processing.sar import FastBackProjection
 
-            fbp = FastBackProjection(metadata=metadata)
-            r = _bench("FastBackProjection.form_image.real_data",
-                        fbp.form_image,
-                        setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
-                        version="1.0.0", **real_kw)
+            with _suppress_stdout():
+                fbp = FastBackProjection(metadata=metadata)
+                r = _bench("FastBackProjection.form_image.real_data",
+                            fbp.form_image,
+                            setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
+                            version="1.0.0", **real_kw)
             if r:
                 results.append(r)
         except Exception as exc:
@@ -2349,7 +2342,10 @@ def run_workflow_benchmark(
 
         print(f"  Running workflow '{wf.name}' "
               f"({iterations} iterations, {warmup} warmup)...")
-        record = runner.run(prefer_gpu=True)
+        record = runner.run(
+            prefer_gpu=True,
+            execution_context={"input_format": "SICD"},
+        )
 
         print(f"  OK    Workflow complete")
         print(f"         wall={record.total_wall_time.mean:.2f}s  "
