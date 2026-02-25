@@ -1271,6 +1271,8 @@ def _run_real_data_io(
                 half = min(256, shape[0] // 2, shape[1] // 2)
                 chip = reader.read_chip(cx - half, cx + half,
                                         cy - half, cy + half)
+            # Ensure native complex64 dtype (sarpy expects complex64, not >c8)
+            chip = chip.astype(np.complex64, copy=False)
 
             # Adapt metadata dimensions to match the chip
             cm = copy.deepcopy(sicd_meta)
@@ -2192,7 +2194,7 @@ def run_image_formation_benchmarks(
         )
 
         with CPHDReader(cphd_path) as reader:
-            metadata = reader.typed_metadata
+            metadata = reader.metadata
             phase_data = reader.read_full()
 
         real_kw = dict(store=store, iterations=iterations, warmup=warmup,
@@ -2217,19 +2219,19 @@ def run_image_formation_benchmarks(
         grid = PolarGrid(geom)
 
         # PFA
-        pfa = PolarFormatAlgorithm(geometry=geom, grid=grid)
+        pfa = PolarFormatAlgorithm(grid=grid)
         _pd = phase_data
-        r = _bench("PolarFormatAlgorithm.form.real_data", pfa.form,
-                    setup=lambda _p=_pd: ((_p,), {}),
+        _geom = geom
+        r = _bench("PolarFormatAlgorithm.form_image.real_data",
+                    pfa.form_image,
+                    setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
                     version="1.0.0", **real_kw)
         if r:
             results.append(r)
 
         # SubaperturePartitioner
-        part = SubaperturePartitioner(n_subapertures=4)
-        r = _bench("SubaperturePartitioner.partition.real_data",
-                    part.partition,
-                    setup=lambda _p=_pd, _g=geom: ((_p, _g), {}),
+        r = _bench("SubaperturePartitioner.init.real_data",
+                    lambda _m=metadata: SubaperturePartitioner(metadata=_m),
                     version="1.0.0", **real_kw)
         if r:
             results.append(r)
@@ -2238,9 +2240,10 @@ def run_image_formation_benchmarks(
         try:
             from grdl.image_processing.sar import RangeDopplerAlgorithm
 
-            rda = RangeDopplerAlgorithm(geometry=geom)
-            r = _bench("RangeDopplerAlgorithm.form.real_data", rda.form,
-                        setup=lambda _p=_pd: ((_p,), {}),
+            rda = RangeDopplerAlgorithm(metadata=metadata)
+            r = _bench("RangeDopplerAlgorithm.form_image.real_data",
+                        rda.form_image,
+                        setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
                         version="1.0.0", **real_kw)
             if r:
                 results.append(r)
@@ -2251,9 +2254,10 @@ def run_image_formation_benchmarks(
         try:
             from grdl.image_processing.sar import StripmapPFA
 
-            spfa = StripmapPFA(geometry=geom, grid=grid, n_subapertures=4)
-            r = _bench("StripmapPFA.form.real_data", spfa.form,
-                        setup=lambda _p=_pd: ((_p,), {}),
+            spfa = StripmapPFA(metadata=metadata)
+            r = _bench("StripmapPFA.form_image.real_data",
+                        spfa.form_image,
+                        setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
                         version="1.0.0", **real_kw)
             if r:
                 results.append(r)
@@ -2264,9 +2268,10 @@ def run_image_formation_benchmarks(
         try:
             from grdl.image_processing.sar import FastBackProjection
 
-            fbp = FastBackProjection(geometry=geom, n_subapertures=4)
-            r = _bench("FastBackProjection.form.real_data", fbp.form,
-                        setup=lambda _p=_pd: ((_p,), {}),
+            fbp = FastBackProjection(metadata=metadata)
+            r = _bench("FastBackProjection.form_image.real_data",
+                        fbp.form_image,
+                        setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
                         version="1.0.0", **real_kw)
             if r:
                 results.append(r)
@@ -2313,7 +2318,11 @@ def run_workflow_benchmark(
 
         from grdl.IO.sar import SICDReader
         from grdl.data_prep import ChipExtractor
+    except ImportError:
+        print("  SKIP  Workflow benchmark (grdl-runtime not installed)")
+        return None
 
+    try:
         wf = load_workflow(str(YAML_PATH))
 
         with SICDReader(sar_path) as reader:
@@ -2354,9 +2363,6 @@ def run_workflow_benchmark(
 
         return record
 
-    except ImportError:
-        print("  SKIP  Workflow benchmark (grdl-runtime not installed)")
-        return None
     except Exception as exc:
         print(f"  FAIL  Workflow benchmark: {exc}")
         return None

@@ -17,27 +17,13 @@ One file:
 
 ## How to Acquire
 
-### Option 1: GeographicLib (Recommended)
-
-```bash
-# Download the 15 arc-minute EGM96 grid (~2.1 MB)
-wget https://geographiclib.sourceforge.io/geoids-distrib/egm96-15.pgm.gz
-gunzip egm96-15.pgm.gz
-mv egm96-15.pgm data/geoid/
-
-# Or the higher resolution 5 arc-minute grid (~18 MB)
-wget https://geographiclib.sourceforge.io/geoids-distrib/egm96-5.pgm.gz
-gunzip egm96-5.pgm.gz
-mv egm96-5.pgm data/geoid/
-```
-
-### Option 2: NGA Direct Download
+### Option 1: NGA Direct Download
 
 1. Visit: https://earth-info.nga.mil/index.php?dir=wgs84&action=wgs84#tab_egm96
 2. Download: EGM96 grid file
 3. Convert to PGM format if needed
 
-### Option 3: PROJ Data Grid
+### Option 2: PROJ Data Grid
 
 If you have PROJ installed:
 ```bash

@@ -5,15 +5,15 @@
 **Platform**: Terra (NASA EOS)
 **Sensor**: ASTER (Advanced Spaceborne Thermal Emission and Reflection Radiometer)
 **Product**: AST_L1T (Registered Radiance at the Sensor)
-**Format**: HDF-EOS (HDF4-based)
+**Format**: GeoTIFF
 **Resolution**: 15 m (VNIR), 30 m (SWIR), 90 m (TIR)
 **File Size**: ~100-300 MB
 
 ## Required File
 
 One file is sufficient for testing:
-- **Pattern**: `AST_L1T*.hdf` or `AST_L1T*.hdf5`
-- **Structure**: HDF-EOS with multi-resolution band groups
+- **Pattern**: `AST_L1T*.tif`
+- **Structure**: GeoTIFF with multi-resolution band groups
 - **Recommended**: Any cloud-free AST_L1T scene
 
 ## How to Acquire
@@ -24,13 +24,13 @@ One file is sufficient for testing:
 2. Visit: https://search.earthdata.nasa.gov
 3. Search: "AST_L1T" in the search bar
 4. Filter: Select a recent, cloud-free scene
-5. Download: Single HDF file
+5. Download: Single GeoTIFF file
 
 ### Option 2: LPDAAC Data Pool
 
 1. Visit: https://e4ftl01.cr.usgs.gov/ASTT/AST_L1T.003/
 2. Browse by date
-3. Download any `.hdf` file
+3. Download any `.tif` file
 
 ### Option 3: AppEEARS (Subset/Extract)
 
@@ -51,18 +51,18 @@ Typical AST_L1T file:
 
 **Multi-Resolution Thermal IR**:
 - Primary use case: thermal/IR analysis with VNIR context
-- HDF-EOS format requires specialized parsing (not plain HDF5)
+- GeoTIFF format read via rasterio
 - Band groups organized by subsystem (VNIR, SWIR, TIR)
 
 **Testing Focus**:
-- HDF-EOS format parsing (different from plain HDF5)
+- GeoTIFF format parsing
 - Multi-resolution band handling
 - Thermal band data types and scaling
 
 ## Notes
 
 - **SWIR bands**: Non-functional since April 2008 (detector cryocooler failure). VNIR and TIR still operational.
-- **HDF-EOS format**: Uses HDF4 internally, not HDF5. Requires pyhdf or similar.
+- **Format change**: NASA transitioned AST_L1T from HDF-EOS to GeoTIFF. Current downloads are `.tif`.
 - **End of life approaching**: Terra orbit is degrading; collect data while available.
 - **License**: Public domain (NASA)
 

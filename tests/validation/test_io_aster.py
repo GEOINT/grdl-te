@@ -7,7 +7,7 @@ Tests:
 - Level 2: Multi-band array, VNIR bands at 15m, finite values
 - Level 3: Normalizer integration
 
-Dataset: ASTER L1T (AST_L1T*.hdf)
+Dataset: ASTER L1T (AST_L1T*.tif)
 
 Author
 ------

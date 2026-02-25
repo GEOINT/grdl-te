@@ -7,7 +7,7 @@ Tests:
 - Level 2: Real-valued (detected) array, pixel type, geolocation metadata
 - Level 3: Chip and normalize pipeline
 
-Dataset: SIDD detected imagery (*.nitf)
+Dataset: SIDD detected imagery (*.nitf or *.ntf)
 
 Author
 ------
@@ -62,7 +62,7 @@ def test_sidd_reader_opens(require_sidd_file):
 def test_sidd_metadata_populated(require_sidd_file):
     """typed_metadata with product_type present."""
     with SIDDReader(str(require_sidd_file)) as reader:
-        meta = reader.typed_metadata
+        meta = reader.metadata
         assert meta is not None
 
 
@@ -109,7 +109,7 @@ def test_sidd_pixel_type(require_sidd_file):
 def test_sidd_geolocation_metadata(require_sidd_file):
     """Geographic metadata present in typed_metadata."""
     with SIDDReader(str(require_sidd_file)) as reader:
-        meta = reader.typed_metadata
+        meta = reader.metadata
         # SIDD products carry geolocation info
         assert meta is not None
 

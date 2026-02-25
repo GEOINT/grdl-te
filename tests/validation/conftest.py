@@ -190,6 +190,44 @@ def require_data_file(directory: Path, pattern: str,
     return file_path
 
 
+def require_data_dir(directory: Path, pattern: str,
+                     readme_name: str = "README.md") -> Path:
+    """
+    Require a subdirectory matching pattern exists, otherwise skip test.
+
+    Parameters
+    ----------
+    directory : Path
+        Parent directory to search
+    pattern : str
+        Glob pattern for subdirectory name (e.g., 'BIO_S*')
+    readme_name : str
+        Name of README file with download instructions
+
+    Returns
+    -------
+    Path
+        Path to first matching subdirectory
+
+    Raises
+    ------
+    pytest.skip
+        If no matching directory found, with message pointing to README
+    """
+    if directory.exists():
+        matches = [p for p in directory.glob(pattern) if p.is_dir()]
+        if matches:
+            return matches[0]
+
+    readme_path = directory / readme_name
+    readme_exists = readme_path.exists()
+    msg = (
+        f"Data directory '{pattern}' not found in {directory}. "
+        f"Download instructions: {readme_path if readme_exists else 'see data/ folder'}"
+    )
+    pytest.skip(msg)
+
+
 @pytest.fixture
 def require_landsat_file(landsat_data_dir):
     """Landsat 8/9 Surface Reflectance COG file."""
@@ -247,7 +285,17 @@ def require_crsd_file(crsd_data_dir):
 @pytest.fixture
 def require_sidd_file(sidd_data_dir):
     """SIDD NITF file."""
-    return require_data_file(sidd_data_dir, "*.nitf")
+    result = find_data_file(sidd_data_dir, "*.nitf")
+    if result is None:
+        result = find_data_file(sidd_data_dir, "*.ntf")
+    if result is None:
+        readme_path = sidd_data_dir / "README.md"
+        msg = (
+            f"Data file '*.nitf or *.ntf' not found in {sidd_data_dir}. "
+            f"Download instructions: {readme_path if readme_path.exists() else 'see data/ folder'}"
+        )
+        pytest.skip(msg)
+    return result
 
 
 @pytest.fixture
@@ -258,14 +306,14 @@ def require_sentinel1_file(sentinel1_data_dir):
 
 @pytest.fixture
 def require_aster_file(aster_data_dir):
-    """ASTER L1T HDF file."""
-    return require_data_file(aster_data_dir, "AST_L1T*.hdf")
+    """ASTER L1T GeoTIFF file."""
+    return require_data_file(aster_data_dir, "AST_L1T*.tif")
 
 
 @pytest.fixture
 def require_biomass_file(biomass_data_dir):
     """BIOMASS L1 GeoTIFF file."""
-    return require_data_file(biomass_data_dir, "BIO_S2_*.tif")
+    return require_data_dir(biomass_data_dir, "BIO_S*")
 
 
 @pytest.fixture

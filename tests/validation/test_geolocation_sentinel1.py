@@ -113,7 +113,7 @@ class TestSentinel1SLCGeolocation:
             geo = Sentinel1SLCGeolocation.from_reader(reader)
             shape = reader.get_shape()
 
-        lat, lon = geo.image_to_latlon(shape[0] // 2, shape[1] // 2)
+        lat, lon, _ = geo.image_to_latlon(shape[0] // 2, shape[1] // 2)
         assert -90 <= lat <= 90, f"Latitude {lat} out of range"
         assert -180 <= lon <= 180, f"Longitude {lon} out of range"
 
@@ -125,7 +125,7 @@ class TestSentinel1SLCGeolocation:
             shape = reader.get_shape()
 
         r0, c0 = shape[0] // 2, shape[1] // 2
-        lat, lon = geo.image_to_latlon(r0, c0)
+        lat, lon, _ = geo.image_to_latlon(r0, c0)
         r1, c1 = geo.latlon_to_image(lat, lon)
         assert abs(r1 - r0) <= 1.5, f"Row roundtrip error: {abs(r1-r0)}"
         assert abs(c1 - c0) <= 1.5, f"Col roundtrip error: {abs(c1-c0)}"
@@ -139,7 +139,7 @@ class TestSentinel1SLCGeolocation:
 
         corners = [(0, 0), (0, shape[1]-1), (shape[0]-1, 0), (shape[0]-1, shape[1]-1)]
         for r, c in corners:
-            lat, lon = geo.image_to_latlon(r, c)
+            lat, lon, _ = geo.image_to_latlon(r, c)
             assert -90 <= lat <= 90
             assert -180 <= lon <= 180
 
@@ -154,7 +154,7 @@ class TestSentinel1SLCGeolocation:
         rng = np.random.default_rng(42)
         rows = rng.uniform(0, shape[0], size=1000)
         cols = rng.uniform(0, shape[1], size=1000)
-        lats, lons = geo.image_to_latlon(rows, cols)
+        lats, lons, _ = geo.image_to_latlon(rows, cols)
         assert lats.shape == (1000,)
         assert np.all((-90 <= lats) & (lats <= 90))
         assert np.all((-180 <= lons) & (lons <= 180))

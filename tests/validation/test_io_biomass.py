@@ -7,7 +7,7 @@ Tests:
 - Level 2: Complex or real array output, finite values
 - Level 3: BIOMASSCatalog search, empty query handling
 
-Dataset: BIOMASS L1 (BIO_S2_*.tif)
+Dataset: BIOMASS L1 product directory (BIO_S*)
 
 Author
 ------

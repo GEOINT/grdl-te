@@ -92,13 +92,32 @@ pytestmark = [
 # =============================================================================
 
 
-@pytest.fixture
-def cphd_data(require_cphd_file):
-    """Load CPHD metadata and phase data."""
-    with CPHDReader(require_cphd_file) as reader:
-        meta = reader.typed_metadata
+@pytest.fixture(scope="module")
+def cphd_data(cphd_data_dir):
+    """Load CPHD metadata and phase data (module-scoped, read once)."""
+    from tests.validation.conftest import require_data_file
+    filepath = require_data_file(cphd_data_dir, "*.cphd")
+    with CPHDReader(filepath) as reader:
+        meta = reader.metadata
         data = reader.read_full()
     return meta, data
+
+
+@pytest.fixture(scope="module")
+def collection_geometry(cphd_data):
+    """Build CollectionGeometry once for the module."""
+    if not _HAS_GEOM:
+        pytest.skip("CollectionGeometry not available")
+    meta, _ = cphd_data
+    return CollectionGeometry(meta)
+
+
+@pytest.fixture(scope="module")
+def polar_grid(collection_geometry):
+    """Build PolarGrid once for the module."""
+    if not _HAS_GRID:
+        pytest.skip("PolarGrid not available")
+    return PolarGrid(collection_geometry)
 
 
 # =============================================================================
@@ -108,45 +127,35 @@ def cphd_data(require_cphd_file):
 
 @pytest.mark.slow
 @pytest.mark.skipif(not _HAS_GEOM, reason="CollectionGeometry not available")
-def test_collection_geometry_init(cphd_data):
+def test_collection_geometry_init(collection_geometry):
     """Constructs from CPHD metadata."""
-    meta, _ = cphd_data
-    geom = CollectionGeometry(meta)
-    assert geom is not None
+    assert collection_geometry is not None
 
 
 @pytest.mark.slow
 @pytest.mark.skipif(not _HAS_GEOM, reason="CollectionGeometry not available")
-def test_collection_geometry_attributes(cphd_data):
-    """Has grazing_angle and/or squint_angle attributes."""
-    meta, _ = cphd_data
-    geom = CollectionGeometry(meta)
-    has_grazing = hasattr(geom, 'grazing_angle')
-    has_squint = hasattr(geom, 'squint_angle')
-    assert has_grazing or has_squint, "CollectionGeometry missing angle attributes"
+def test_collection_geometry_attributes(collection_geometry):
+    """Has graz_ang and/or azim_ang attributes."""
+    has_grazing = hasattr(collection_geometry, 'graz_ang')
+    has_azimuth = hasattr(collection_geometry, 'azim_ang')
+    assert has_grazing or has_azimuth, "CollectionGeometry missing angle attributes"
 
 
 @pytest.mark.slow
 @pytest.mark.skipif(not _HAS_GRID, reason="PolarGrid not available")
 @pytest.mark.skipif(not _HAS_GEOM, reason="CollectionGeometry not available")
-def test_polar_grid_init(cphd_data):
+def test_polar_grid_init(polar_grid):
     """Constructs from CollectionGeometry."""
-    meta, _ = cphd_data
-    geom = CollectionGeometry(meta)
-    grid = PolarGrid(geom)
-    assert grid is not None
+    assert polar_grid is not None
 
 
 @pytest.mark.slow
 @pytest.mark.skipif(not _HAS_GRID, reason="PolarGrid not available")
 @pytest.mark.skipif(not _HAS_GEOM, reason="CollectionGeometry not available")
-def test_polar_grid_bounds(cphd_data):
+def test_polar_grid_bounds(polar_grid):
     """grid.bounds returns tuple of floats."""
-    meta, _ = cphd_data
-    geom = CollectionGeometry(meta)
-    grid = PolarGrid(geom)
-    if hasattr(grid, 'bounds'):
-        bounds = grid.bounds
+    if hasattr(polar_grid, 'bounds'):
+        bounds = polar_grid.bounds
         assert isinstance(bounds, tuple)
         assert len(bounds) >= 4
         assert all(isinstance(b, (int, float)) for b in bounds)
@@ -161,13 +170,11 @@ def test_polar_grid_bounds(cphd_data):
 @pytest.mark.skipif(not _HAS_PFA, reason="PolarFormatAlgorithm not available")
 @pytest.mark.skipif(not _HAS_GEOM, reason="CollectionGeometry not available")
 @pytest.mark.skipif(not _HAS_GRID, reason="PolarGrid not available")
-def test_pfa_form_returns_complex_2d(cphd_data):
+def test_pfa_form_returns_complex_2d(cphd_data, collection_geometry, polar_grid):
     """PFA produces (rows, cols) complex array."""
-    meta, phase_data = cphd_data
-    geom = CollectionGeometry(meta)
-    grid = PolarGrid(geom)
-    pfa = PolarFormatAlgorithm(geometry=geom, grid=grid)
-    result = pfa.form(phase_data)
+    _, phase_data = cphd_data
+    pfa = PolarFormatAlgorithm(grid=polar_grid)
+    result = pfa.form_image(phase_data, geometry=collection_geometry)
     assert isinstance(result, np.ndarray)
     assert result.ndim == 2
     assert np.iscomplexobj(result)
@@ -177,13 +184,11 @@ def test_pfa_form_returns_complex_2d(cphd_data):
 @pytest.mark.skipif(not _HAS_PFA, reason="PolarFormatAlgorithm not available")
 @pytest.mark.skipif(not _HAS_GEOM, reason="CollectionGeometry not available")
 @pytest.mark.skipif(not _HAS_GRID, reason="PolarGrid not available")
-def test_pfa_form_nonzero(cphd_data):
+def test_pfa_form_nonzero(cphd_data, collection_geometry, polar_grid):
     """Output has non-zero content."""
-    meta, phase_data = cphd_data
-    geom = CollectionGeometry(meta)
-    grid = PolarGrid(geom)
-    pfa = PolarFormatAlgorithm(geometry=geom, grid=grid)
-    result = pfa.form(phase_data)
+    _, phase_data = cphd_data
+    pfa = PolarFormatAlgorithm(grid=polar_grid)
+    result = pfa.form_image(phase_data, geometry=collection_geometry)
     assert np.abs(result).max() > 0
 
 
@@ -191,25 +196,22 @@ def test_pfa_form_nonzero(cphd_data):
 @pytest.mark.skipif(not _HAS_SUBAP, reason="SubaperturePartitioner not available")
 @pytest.mark.skipif(not _HAS_GEOM, reason="CollectionGeometry not available")
 def test_subaperture_partitioner(cphd_data):
-    """Produces n_subapertures sub-arrays."""
-    meta, phase_data = cphd_data
-    geom = CollectionGeometry(meta)
-    part = SubaperturePartitioner(n_subapertures=4)
-    subs = part.partition(phase_data, geom)
-    assert isinstance(subs, (list, tuple))
-    assert len(subs) == 4
+    """Produces multiple sub-apertures."""
+    meta, _ = cphd_data
+    part = SubaperturePartitioner(metadata=meta)
+    assert isinstance(part.partitions, list)
+    assert part.num_subapertures >= 2, "Expected at least 2 sub-apertures"
 
 
 @pytest.mark.slow
 @pytest.mark.skipif(not _HAS_RDA, reason="RangeDopplerAlgorithm not available")
 @pytest.mark.skipif(not _HAS_GEOM, reason="CollectionGeometry not available")
-def test_rda_form_returns_complex_2d(cphd_data):
+def test_rda_form_returns_complex_2d(cphd_data, collection_geometry):
     """RDA produces complex image."""
     meta, phase_data = cphd_data
-    geom = CollectionGeometry(meta)
     try:
-        rda = RangeDopplerAlgorithm(geometry=geom)
-        result = rda.form(phase_data)
+        rda = RangeDopplerAlgorithm(metadata=meta)
+        result = rda.form_image(phase_data, geometry=collection_geometry)
         assert isinstance(result, np.ndarray)
         assert np.iscomplexobj(result)
     except Exception as exc:
@@ -220,14 +222,12 @@ def test_rda_form_returns_complex_2d(cphd_data):
 @pytest.mark.skipif(not _HAS_SPFA, reason="StripmapPFA not available")
 @pytest.mark.skipif(not _HAS_GEOM, reason="CollectionGeometry not available")
 @pytest.mark.skipif(not _HAS_GRID, reason="PolarGrid not available")
-def test_stripmapPFA_form(cphd_data):
+def test_stripmapPFA_form(cphd_data, collection_geometry):
     """StripmapPFA output shape and type."""
     meta, phase_data = cphd_data
-    geom = CollectionGeometry(meta)
-    grid = PolarGrid(geom)
     try:
-        spfa = StripmapPFA(geometry=geom, grid=grid, n_subapertures=4)
-        result = spfa.form(phase_data)
+        spfa = StripmapPFA(metadata=meta)
+        result = spfa.form_image(phase_data, geometry=collection_geometry)
         assert isinstance(result, np.ndarray)
         assert np.iscomplexobj(result)
     except Exception as exc:
@@ -237,13 +237,12 @@ def test_stripmapPFA_form(cphd_data):
 @pytest.mark.slow
 @pytest.mark.skipif(not _HAS_FBP, reason="FastBackProjection not available")
 @pytest.mark.skipif(not _HAS_GEOM, reason="CollectionGeometry not available")
-def test_fbp_form(cphd_data):
+def test_fbp_form(cphd_data, collection_geometry):
     """FFBP output shape and type."""
     meta, phase_data = cphd_data
-    geom = CollectionGeometry(meta)
     try:
-        fbp = FastBackProjection(geometry=geom, n_subapertures=4)
-        result = fbp.form(phase_data)
+        fbp = FastBackProjection(metadata=meta)
+        result = fbp.form_image(phase_data, geometry=collection_geometry)
         assert isinstance(result, np.ndarray)
         assert np.iscomplexobj(result)
     except Exception as exc:
@@ -260,13 +259,11 @@ def test_fbp_form(cphd_data):
 @pytest.mark.skipif(not _HAS_PFA, reason="PolarFormatAlgorithm not available")
 @pytest.mark.skipif(not _HAS_GEOM, reason="CollectionGeometry not available")
 @pytest.mark.skipif(not _HAS_GRID, reason="PolarGrid not available")
-def test_pfa_to_magnitude(cphd_data):
+def test_pfa_to_magnitude(cphd_data, collection_geometry, polar_grid):
     """PFA → np.abs() → float array in valid range."""
-    meta, phase_data = cphd_data
-    geom = CollectionGeometry(meta)
-    grid = PolarGrid(geom)
-    pfa = PolarFormatAlgorithm(geometry=geom, grid=grid)
-    result = pfa.form(phase_data)
+    _, phase_data = cphd_data
+    pfa = PolarFormatAlgorithm(grid=polar_grid)
+    result = pfa.form_image(phase_data, geometry=collection_geometry)
     magnitude = np.abs(result)
     assert magnitude.dtype in [np.float32, np.float64]
     assert magnitude.min() >= 0

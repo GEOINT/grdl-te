@@ -14,13 +14,33 @@ One file is sufficient for testing:
 - **Structure**: Binary radar signal with XML metadata header
 - **Content**: Compensated radar signal data (related to CPHD)
 
-## You Already Have This Data
+## How to Acquire
 
-Copy any `.crsd` file from your SAR data collection:
+CRSD is an NGA standard without public open-data repositories. Options:
+
+### Option 1: Existing SAR Data Collection
+
+If you already have CRSD files, copy one here:
 
 ```bash
 cp /path/to/sar/raw_crsd/*.crsd data/crsd/
 ```
+
+### Option 2: NGA / Government Sources
+
+1. Visit the NGA Standards Registry: https://nsgreg.nga.mil
+2. CRSD sample files may be available alongside the standard specification
+3. Requires appropriate access credentials
+
+### Option 3: SAR Vendor Request
+
+Some SAR data providers (Umbra, Capella, etc.) may supply CRSD-formatted
+data on request, though CPHD is far more common.
+
+### Option 4: Generate with sarkit
+
+If you have CPHD data, sarkit may support writing CRSD files programmatically.
+Check sarkit documentation for CRSD writer capabilities.
 
 ## File Properties
 

@@ -4,16 +4,28 @@
 
 **Platform**: BIOMASS (ESA Earth Explorer)
 **Product**: L1 SCS (Single-look Complex Slant-range)
-**Format**: GeoTIFF (complex or detected)
+**Format**: GeoTIFF pair (magnitude + phase) with XML annotation
 **Frequency**: P-band (435 MHz) - lowest frequency spaceborne SAR
 **Resolution**: ~25 m (range) x ~6 m (azimuth)
-**File Size**: ~100-500 MB
+**File Size**: ~100-500 MB per product
 
-## Required File
+## Required Data
 
-One file is sufficient for testing:
-- **Pattern**: `BIO_S2_*.tif` or BIOMASS L1 product file
-- **Structure**: GeoTIFF with BIOMASS-specific metadata
+One complete product **directory** is required (not a single file). The reader
+needs both the magnitude and phase TIFFs to reconstruct complex SLC data:
+
+```
+data/biomass/
+└── BIO_S*_<product_dir>/
+    ├── annotation/
+    │   └── *_annot.xml          # Product metadata
+    └── measurement/
+        ├── *_abs.tiff           # Magnitude component
+        └── *_phase.tiff         # Phase component (radians)
+```
+
+- **Pattern**: `BIO_S*` product directory (any swath: S1, S2, S3, etc.)
+- **Both TIFFs required**: The reader reconstructs complex values as `magnitude * exp(1j * phase)`
 - **Content**: P-band SAR imagery (forest biomass mapping)
 
 ## How to Acquire
@@ -25,7 +37,7 @@ BIOMASS launched in April 2025. Data is available through ESA:
 1. Visit: https://dataspace.copernicus.eu
 2. Search: "BIOMASS" mission
 3. Filter: L1 SCS product type
-4. Download: Single product file
+4. Download: Single product (extract the full directory)
 
 ### Option 2: ESA BIOMASS Data Hub
 

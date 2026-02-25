@@ -56,7 +56,7 @@ def test_cphd_reader_opens(require_cphd_file):
 def test_cphd_metadata_populated(require_cphd_file):
     """typed_metadata is not None."""
     with CPHDReader(require_cphd_file) as reader:
-        assert reader.typed_metadata is not None
+        assert reader.metadata is not None
 
 
 @pytest.mark.slow
@@ -88,13 +88,10 @@ def test_cphd_read_full_complex(require_cphd_file):
 def test_cphd_pvp_populated(require_cphd_file):
     """read_pvp() returns structured array with fields."""
     with CPHDReader(require_cphd_file) as reader:
-        pvp = reader.read_pvp()
+        pvp = reader.metadata.pvp
         assert pvp is not None
-        # PVP is either a structured ndarray or dict of arrays
-        if isinstance(pvp, np.ndarray):
-            assert pvp.dtype.names is not None or pvp.ndim >= 1
-        elif isinstance(pvp, dict):
-            assert len(pvp) > 0
+        # PVP should have core fields populated
+        assert pvp.tx_time is not None or pvp.tx_pos is not None
 
 
 @pytest.mark.slow
@@ -120,7 +117,7 @@ def test_cphd_metadata_to_collection_geometry(require_cphd_file):
         pytest.skip("CollectionGeometry not available")
 
     with CPHDReader(require_cphd_file) as reader:
-        meta = reader.typed_metadata
+        meta = reader.metadata
         geom = CollectionGeometry(meta)
         assert geom is not None
-        assert hasattr(geom, 'grazing_angle') or hasattr(geom, 'squint_angle')
+        assert hasattr(geom, 'graz_ang') or hasattr(geom, 'azim_ang')
