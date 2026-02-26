@@ -94,7 +94,8 @@ def _bench(
         version=version,
     )
     try:
-        record = bench.run()
+        with _suppress_stdout():
+            record = bench.run()
     except Exception as exc:
         print(f"  SKIP  {name:<55s}  {exc}")
         return None
@@ -2189,53 +2190,51 @@ def run_image_formation_benchmarks(
         real_kw = dict(store=store, iterations=iterations, warmup=warmup,
                        tags={**tags, "data": "real"}, module=mod)
 
-        with _suppress_stdout():
-            # CollectionGeometry
-            r = _bench("CollectionGeometry.init.real_data",
-                        lambda: CollectionGeometry(metadata),
-                        version="1.0.0", **real_kw)
-            if r:
-                results.append(r)
+        # CollectionGeometry
+        r = _bench("CollectionGeometry.init.real_data",
+                    lambda: CollectionGeometry(metadata),
+                    version="1.0.0", **real_kw)
+        if r:
+            results.append(r)
 
-            geom = CollectionGeometry(metadata)
+        geom = CollectionGeometry(metadata)
 
-            # PolarGrid
-            r = _bench("PolarGrid.init.real_data",
-                        lambda: PolarGrid(geom),
-                        version="1.0.0", **real_kw)
-            if r:
-                results.append(r)
+        # PolarGrid
+        r = _bench("PolarGrid.init.real_data",
+                    lambda: PolarGrid(geom),
+                    version="1.0.0", **real_kw)
+        if r:
+            results.append(r)
 
-            grid = PolarGrid(geom)
+        grid = PolarGrid(geom)
 
-            # PFA
-            pfa = PolarFormatAlgorithm(grid=grid)
-            _pd = phase_data
-            _geom = geom
-            r = _bench("PolarFormatAlgorithm.form_image.real_data",
-                        pfa.form_image,
-                        setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
-                        version="1.0.0", **real_kw)
-            if r:
-                results.append(r)
+        # PFA
+        pfa = PolarFormatAlgorithm(grid=grid)
+        _pd = phase_data
+        _geom = geom
+        r = _bench("PolarFormatAlgorithm.form_image.real_data",
+                    pfa.form_image,
+                    setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
+                    version="1.0.0", **real_kw)
+        if r:
+            results.append(r)
 
-            # SubaperturePartitioner
-            r = _bench("SubaperturePartitioner.init.real_data",
-                        lambda _m=metadata: SubaperturePartitioner(metadata=_m),
-                        version="1.0.0", **real_kw)
-            if r:
-                results.append(r)
+        # SubaperturePartitioner
+        r = _bench("SubaperturePartitioner.init.real_data",
+                    lambda _m=metadata: SubaperturePartitioner(metadata=_m),
+                    version="1.0.0", **real_kw)
+        if r:
+            results.append(r)
 
         # RDA (may not be compatible with all data)
         try:
             from grdl.image_processing.sar import RangeDopplerAlgorithm
 
-            with _suppress_stdout():
-                rda = RangeDopplerAlgorithm(metadata=metadata)
-                r = _bench("RangeDopplerAlgorithm.form_image.real_data",
-                            rda.form_image,
-                            setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
-                            version="1.0.0", **real_kw)
+            rda = RangeDopplerAlgorithm(metadata=metadata)
+            r = _bench("RangeDopplerAlgorithm.form_image.real_data",
+                        rda.form_image,
+                        setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
+                        version="1.0.0", **real_kw)
             if r:
                 results.append(r)
         except Exception as exc:
@@ -2245,12 +2244,11 @@ def run_image_formation_benchmarks(
         try:
             from grdl.image_processing.sar import StripmapPFA
 
-            with _suppress_stdout():
-                spfa = StripmapPFA(metadata=metadata)
-                r = _bench("StripmapPFA.form_image.real_data",
-                            spfa.form_image,
-                            setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
-                            version="1.0.0", **real_kw)
+            spfa = StripmapPFA(metadata=metadata)
+            r = _bench("StripmapPFA.form_image.real_data",
+                        spfa.form_image,
+                        setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
+                        version="1.0.0", **real_kw)
             if r:
                 results.append(r)
         except Exception as exc:
@@ -2260,12 +2258,11 @@ def run_image_formation_benchmarks(
         try:
             from grdl.image_processing.sar import FastBackProjection
 
-            with _suppress_stdout():
-                fbp = FastBackProjection(metadata=metadata)
-                r = _bench("FastBackProjection.form_image.real_data",
-                            fbp.form_image,
-                            setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
-                            version="1.0.0", **real_kw)
+            fbp = FastBackProjection(metadata=metadata)
+            r = _bench("FastBackProjection.form_image.real_data",
+                        fbp.form_image,
+                        setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
+                        version="1.0.0", **real_kw)
             if r:
                 results.append(r)
         except Exception as exc:
