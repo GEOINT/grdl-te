@@ -41,8 +41,8 @@ addopts = [
     "-v",
     "--strict-markers",
     "--tb=short",
-    "--cov=tests",
-    "--cov-report=term-missing",
+    "--cov=grdl",
+    "--cov-report=json:.coverage.json",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
@@ -80,8 +80,11 @@ markers = [
 include = ["grdl_te*"]
 
 [tool.coverage.run]
-source = ["tests", "grdl_te"]
-omit = ["*/test_*.py"]
+source = ["grdl"]
+omit = [
+    "*/test_*.py",
+    "*/_backend.py",
+]
 
 [tool.coverage.report]
 exclude_lines = [

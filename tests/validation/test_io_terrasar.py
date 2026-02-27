@@ -68,7 +68,7 @@ def test_tsx_reader_opens(require_terrasar_dir):
 def test_tsx_metadata_populated(require_terrasar_dir):
     """TerraSARMetadata is not None."""
     with TerraSARReader(require_terrasar_dir) as reader:
-        meta = reader.typed_metadata
+        meta = reader.metadata
         assert meta is not None
 
 
@@ -137,7 +137,7 @@ def test_tsx_available_polarizations(require_terrasar_dir):
 def test_tsx_metadata_fields(require_terrasar_dir):
     """product_info, scene_info, radar_params populated."""
     with TerraSARReader(require_terrasar_dir) as reader:
-        meta = reader.typed_metadata
+        meta = reader.metadata
         assert meta is not None
         # TerraSARMetadata has nested dataclasses
         if hasattr(meta, 'product_info'):

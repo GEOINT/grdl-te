@@ -2209,11 +2209,12 @@ def run_image_formation_benchmarks(
         grid = PolarGrid(geom)
 
         # PFA
-        pfa = PolarFormatAlgorithm(grid=grid)
         _pd = phase_data
         _geom = geom
         r = _bench("PolarFormatAlgorithm.form_image.real_data",
-                    pfa.form_image,
+                    lambda _p, geometry, _g=grid: (
+                        PolarFormatAlgorithm(grid=_g).form_image(_p, geometry=geometry)
+                    ),
                     setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
                     version="1.0.0", **real_kw)
         if r:
@@ -2230,9 +2231,10 @@ def run_image_formation_benchmarks(
         try:
             from grdl.image_processing.sar import RangeDopplerAlgorithm
 
-            rda = RangeDopplerAlgorithm(metadata=metadata)
             r = _bench("RangeDopplerAlgorithm.form_image.real_data",
-                        rda.form_image,
+                        lambda _p, geometry, _m=metadata: (
+                            RangeDopplerAlgorithm(metadata=_m).form_image(_p, geometry=geometry)
+                        ),
                         setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
                         version="1.0.0", **real_kw)
             if r:
@@ -2244,9 +2246,10 @@ def run_image_formation_benchmarks(
         try:
             from grdl.image_processing.sar import StripmapPFA
 
-            spfa = StripmapPFA(metadata=metadata)
             r = _bench("StripmapPFA.form_image.real_data",
-                        spfa.form_image,
+                        lambda _p, geometry, _m=metadata: (
+                            StripmapPFA(metadata=_m).form_image(_p, geometry=geometry)
+                        ),
                         setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
                         version="1.0.0", **real_kw)
             if r:
@@ -2258,9 +2261,10 @@ def run_image_formation_benchmarks(
         try:
             from grdl.image_processing.sar import FastBackProjection
 
-            fbp = FastBackProjection(metadata=metadata)
             r = _bench("FastBackProjection.form_image.real_data",
-                        fbp.form_image,
+                        lambda _p, geometry, _m=metadata: (
+                            FastBackProjection(metadata=_m).form_image(_p, geometry=geometry)
+                        ),
                         setup=lambda _p=_pd, _g=_geom: ((_p,), {"geometry": _g}),
                         version="1.0.0", **real_kw)
             if r:

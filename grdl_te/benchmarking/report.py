@@ -324,7 +324,7 @@ def _format_record_detail(
         )
     )
 
-    if record.step_results:
+    if len(record.step_results) > 1:
         lines.append("")
         lines.append(f"     Steps ({len(record.step_results)}):")
         for step in record.step_results:

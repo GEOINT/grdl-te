@@ -95,8 +95,10 @@ pytestmark = [
 @pytest.fixture(scope="module")
 def cphd_data(cphd_data_dir):
     """Load CPHD metadata and phase data (module-scoped, read once)."""
-    from tests.validation.conftest import require_data_file
-    filepath = require_data_file(cphd_data_dir, "*.cphd")
+    matches = list(cphd_data_dir.glob("*.cphd")) if cphd_data_dir.exists() else []
+    if not matches:
+        pytest.skip(f"CPHD file not found in {cphd_data_dir}")
+    filepath = matches[0]
     with CPHDReader(filepath) as reader:
         meta = reader.metadata
         data = reader.read_full()

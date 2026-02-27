@@ -62,7 +62,7 @@ def test_crsd_reader_opens(require_crsd_file):
 def test_crsd_metadata_populated(require_crsd_file):
     """typed_metadata is not None."""
     with CRSDReader(require_crsd_file) as reader:
-        assert reader.typed_metadata is not None
+        assert reader.metadata is not None
 
 
 @pytest.mark.slow
