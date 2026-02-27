@@ -42,7 +42,7 @@ addopts = [
     "--strict-markers",
     "--tb=short",
     "--cov=grdl",
-    "--cov-report=json:.coverage.json",
+    "--cov-report=json:.coverage.tmp.json",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",

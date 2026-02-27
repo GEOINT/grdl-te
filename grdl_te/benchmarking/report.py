@@ -248,6 +248,11 @@ def _format_metrics_table(
     ]
 
 
+def _step_was_skipped(step: StepBenchmarkResult) -> bool:
+    """Return True if a step was skipped (all wall and CPU times are zero)."""
+    return step.wall_time_s.max == 0.0 and step.cpu_time_s.max == 0.0
+
+
 def _format_step_detail(step: StepBenchmarkResult) -> List[str]:
     """Build the detail block for a single workflow step.
 
@@ -324,11 +329,23 @@ def _format_record_detail(
         )
     )
 
-    if len(record.step_results) > 1:
+    if record.step_results:
+        ran = [s for s in record.step_results if not _step_was_skipped(s)]
+        skipped = [s for s in record.step_results if _step_was_skipped(s)]
+
         lines.append("")
-        lines.append(f"     Steps ({len(record.step_results)}):")
+        lines.append(
+            f"     Steps ({len(ran)} ran, {len(skipped)} skipped"
+            f" / {len(record.step_results)} total):"
+        )
         for step in record.step_results:
-            lines.extend(_format_step_detail(step))
+            if _step_was_skipped(step):
+                lines.append(
+                    f"       [{step.step_index}] {step.processor_name}"
+                    f"  -- SKIPPED (condition not met)"
+                )
+            else:
+                lines.extend(_format_step_detail(step))
 
     return lines
 
@@ -376,6 +393,9 @@ def _format_module_summary(records: List[BenchmarkRecord]) -> List[str]:
     for record in records:
         mod = record.tags.get("module", "unknown")
         module_data.setdefault(mod, []).append(record.total_wall_time.mean)
+
+    if len(module_data) <= 1:
+        return []
 
     lines = [
         "",

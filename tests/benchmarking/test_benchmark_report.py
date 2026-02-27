@@ -200,8 +200,27 @@ class TestFormatReport:
         step = _make_step(processor_name="MyFilter")
         record = _make_record(step_results=[step])
         report = format_report([record])
-        assert "Steps (1):" in report
+        assert "1 ran, 0 skipped / 1 total" in report
         assert "MyFilter" in report
+
+    def test_skipped_steps_shown_inline(self):
+        """Skipped steps appear as one-liners in step order."""
+        ran_step = _make_step(step_index=0, processor_name="RanFilter")
+        skipped_step = StepBenchmarkResult(
+            step_index=1,
+            processor_name="SkippedProcessor",
+            wall_time_s=AggregatedMetrics.from_values([0.0, 0.0, 0.0]),
+            cpu_time_s=AggregatedMetrics.from_values([0.0, 0.0, 0.0]),
+            peak_rss_bytes=AggregatedMetrics.from_values([0.0, 0.0, 0.0]),
+            gpu_used=False,
+            sample_count=3,
+        )
+        record = _make_record(step_results=[ran_step, skipped_step])
+        report = format_report([record])
+        assert "1 ran, 1 skipped / 2 total" in report
+        assert "RanFilter" in report
+        assert "SkippedProcessor" in report
+        assert "SKIPPED (condition not met)" in report
 
     def test_records_with_gpu_memory(self):
         """GPU memory statistics appear when present in steps."""

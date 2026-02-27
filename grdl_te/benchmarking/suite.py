@@ -2400,12 +2400,13 @@ def print_summary(all_results: List) -> None:
         module_times[mod] = (module_times.get(mod, 0.0)
                              + record.total_wall_time.mean)
 
-    print(f"\n  Module Totals:")
-    print(f"  {'Module':<40s}  {'Total Wall (s)':>14s}")
-    print(f"  {'-' * 40}  {'-' * 14}")
-    for mod, total in sorted(module_times.items(),
-                             key=lambda x: x[1], reverse=True):
-        print(f"  {mod:<40s}  {total:>14.2f}")
+    if len(module_times) > 1:
+        print(f"\n  Module Totals:")
+        print(f"  {'Module':<40s}  {'Total Wall (s)':>14s}")
+        print(f"  {'-' * 40}  {'-' * 14}")
+        for mod, total in sorted(module_times.items(),
+                                 key=lambda x: x[1], reverse=True):
+            print(f"  {mod:<40s}  {total:>14.2f}")
 
     print(f"\n  Total benchmarks: {len(all_results)}")
     total_wall = sum(r.total_wall_time.mean for r in all_results)
