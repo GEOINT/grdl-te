@@ -157,6 +157,14 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
         # Resolve source once — reused across all iterations
         resolved = self._source.resolve()
 
+        # Auto-populate array dimension tags from source
+        merged_tags = dict(self._tags)
+        shape = self._source.shape_hint
+        if shape is not None:
+            merged_tags.setdefault("rows", str(shape[0]))
+            merged_tags.setdefault("cols", str(shape[1]))
+            merged_tags.setdefault("array_size", f"{shape[0]}x{shape[1]}")
+
         # Build execute arguments
         exec_kwargs: Dict[str, Any] = dict(execute_kwargs)
 
@@ -188,16 +196,47 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
         total_cpu_times = [m.total_cpu_time_s for m in all_workflow_metrics]
         total_peak_rss = [float(m.peak_rss_bytes) for m in all_workflow_metrics]
 
-        # Aggregate per-step metrics
-        steps_by_index: Dict[int, List[Any]] = defaultdict(list)
+        # Aggregate per-step metrics.
+        # Prefer step_id (set by DAG executors) for deterministic grouping
+        # of parallel steps.  Fall back to step_index for backward
+        # compatibility with linear workflows that don't set step_id.
+        def _step_key(sm: Any) -> str:
+            if getattr(sm, "step_id", None) is not None:
+                return sm.step_id
+            return f"__idx_{sm.step_index}"
+
+        steps_by_key: Dict[str, List[Any]] = defaultdict(list)
         for wf_metrics in all_workflow_metrics:
             for sm in wf_metrics.step_metrics:
-                steps_by_index[sm.step_index].append(sm)
+                steps_by_key[_step_key(sm)].append(sm)
 
         step_results = [
             StepBenchmarkResult.from_step_metrics(metrics)
-            for _, metrics in sorted(steps_by_index.items())
+            for _, metrics in steps_by_key.items()
         ]
+        # Sort by topological step_index (execution order), not
+        # alphabetical step_id, so reports display steps in the
+        # order they actually run.
+        step_results.sort(key=lambda s: s.step_index)
+
+        # Inject step dependency graph from the workflow so the report can
+        # reconstruct branch chains (which sequential steps follow which
+        # concurrent roots).
+        if hasattr(self._workflow, 'steps'):
+            known_ids = {
+                getattr(s, 'id', None)
+                for s in self._workflow.steps
+                if getattr(s, 'id', None)
+            }
+            dep_map: Dict[str, List[Any]] = {}
+            for s in self._workflow.steps:
+                sid = getattr(s, 'id', None)
+                if sid:
+                    raw_deps = getattr(s, 'depends_on', None) or []
+                    dep_map[sid] = [d for d in raw_deps if d in known_ids]
+            for sr in step_results:
+                if sr.step_id and sr.step_id in dep_map:
+                    sr.depends_on = dep_map[sr.step_id]
 
         # Raw metrics for lossless storage
         raw_metrics = [m.to_dict() for m in all_workflow_metrics]
@@ -217,7 +256,7 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
             total_peak_rss=AggregatedMetrics.from_values(total_peak_rss),
             step_results=step_results,
             raw_metrics=raw_metrics,
-            tags=self._tags,
+            tags=merged_tags,
         )
 
         if self._store is not None:

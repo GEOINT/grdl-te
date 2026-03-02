@@ -248,9 +248,196 @@ def _format_metrics_table(
     ]
 
 
+def _format_metrics_table_partial(
+    wall: AggregatedMetrics,
+    cpu: AggregatedMetrics,
+    mem: AggregatedMetrics,
+    indent: str = "     ",
+) -> List[str]:
+    """Build a statistics table for a concurrent step.
+
+    Wall and CPU rows are shown normally.  The memory row shows only
+    the mean value with a ``(shared)`` annotation because per-step
+    memory cannot be isolated when threads share a process.
+
+    Parameters
+    ----------
+    wall : AggregatedMetrics
+        Wall-clock time statistics in seconds.
+    cpu : AggregatedMetrics
+        CPU time statistics in seconds.
+    mem : AggregatedMetrics
+        Level-wide peak memory (shared across concurrent steps).
+    indent : str
+        Whitespace prefix for each line.
+
+    Returns
+    -------
+    List[str]
+    """
+    hdr = (
+        f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
+        f"{'StdDev':>10s}  {'P95':>10s}  {'Min':>10s}  {'Max':>10s}"
+    )
+    sep = f"{indent}{THIN_RULE_CHAR * 78}"
+
+    def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
+             fmt: str = ".4f") -> str:
+        return (
+            f"{indent}{label:<12s}  "
+            f"{m.mean / divisor:>10{fmt}}  "
+            f"{m.median / divisor:>10{fmt}}  "
+            f"{m.stddev / divisor:>10{fmt}}  "
+            f"{m.p95 / divisor:>10{fmt}}  "
+            f"{m.min / divisor:>10{fmt}}  "
+            f"{m.max / divisor:>10{fmt}}"
+        )
+
+    mem_kb = mem.mean / 1024.0
+    if mem_kb >= 1024 * 1024:
+        mem_str = f"{mem_kb / 1024 / 1024:.2f} GB"
+    elif mem_kb >= 1024:
+        mem_str = f"{mem_kb / 1024:.1f} MB"
+    else:
+        mem_str = f"{mem_kb:.1f} KB"
+
+    return [
+        hdr,
+        sep,
+        _row("Wall (s)", wall),
+        _row("CPU  (s)", cpu),
+        f"{indent}{'Mem':12s}  {mem_str:>10s}  (shared across parallel steps)",
+    ]
+
+
 def _step_was_skipped(step: StepBenchmarkResult) -> bool:
     """Return True if a step was skipped (all wall and CPU times are zero)."""
     return step.wall_time_s.max == 0.0 and step.cpu_time_s.max == 0.0
+
+
+def _build_branch_chains(
+    step_results: List[StepBenchmarkResult],
+) -> List[List[StepBenchmarkResult]]:
+    """Group steps into branch chains using dependency information.
+
+    A branch chain is the path from a root step (no intra-workflow
+    parents) through all sequential descendants that have a single
+    parent.  Steps with multiple parents (merge points) terminate a
+    chain.
+
+    Returns an empty list when branch structure cannot be determined
+    (missing ``step_id`` or ``depends_on`` data).
+
+    Parameters
+    ----------
+    step_results : List[StepBenchmarkResult]
+
+    Returns
+    -------
+    List[List[StepBenchmarkResult]]
+        One list per branch, ordered from root to leaf.
+    """
+    active = [s for s in step_results if not _step_was_skipped(s)]
+    if not all(s.step_id for s in active):
+        return []
+    if not any(s.depends_on is not None for s in active):
+        return []
+
+    by_id: Dict[str, StepBenchmarkResult] = {s.step_id: s for s in active}
+
+    # Forward edges: parent → [children]
+    children: Dict[str, List[str]] = {sid: [] for sid in by_id}
+    for sid, step in by_id.items():
+        for dep in (step.depends_on or []):
+            if dep in children:
+                children[dep].append(sid)
+
+    def n_intra_parents(sid: str) -> int:
+        return sum(1 for d in (by_id[sid].depends_on or []) if d in by_id)
+
+    roots = [s for s in active if n_intra_parents(s.step_id) == 0]
+    if len(roots) < 2:
+        return []
+
+    def walk_chain(root_id: str) -> List[str]:
+        chain = [root_id]
+        current = root_id
+        while True:
+            kids = children.get(current, [])
+            if len(kids) == 1 and n_intra_parents(kids[0]) == 1:
+                chain.append(kids[0])
+                current = kids[0]
+            else:
+                break
+        return chain
+
+    return [[by_id[sid] for sid in walk_chain(r.step_id)] for r in roots]
+
+
+def _format_branch_chains(record: BenchmarkRecord) -> List[str]:
+    """Build the parallel-branch comparison block for a single record.
+
+    Emitted only when the record has concurrent steps and dependency
+    info is present to reconstruct branch chains.
+
+    Parameters
+    ----------
+    record : BenchmarkRecord
+
+    Returns
+    -------
+    List[str]
+    """
+    has_parallel = any(
+        s.concurrent for s in record.step_results if not _step_was_skipped(s)
+    )
+    if not has_parallel:
+        return []
+
+    chains = _build_branch_chains(record.step_results)
+    if len(chains) < 2:
+        return []
+
+    chain_times = [sum(s.wall_time_s.mean for s in c) for c in chains]
+    critical_time = max(chain_times)
+
+    active = [s for s in record.step_results if not _step_was_skipped(s)]
+    # Sum of step wall times measured *during* parallel execution.  Because
+    # steps competed for CPU/memory while co-running, each individual time is
+    # inflated relative to what that step would take in isolation.  The ratio
+    # below is NOT a true speedup — compare the parallel wall time against a
+    # dedicated sequential benchmark to get the real wall-clock gain.
+    contended_sum = sum(s.wall_time_s.mean for s in active)
+    actual_wall = record.total_wall_time.mean
+    contended_ratio = contended_sum / actual_wall if actual_wall > 0 else 1.0
+
+    indent = "     "
+    lines = [
+        "",
+        f"{indent}PARALLEL BRANCHES ({len(chains)} branches,"
+        f" critical path: {_fmt_time(critical_time)})",
+        f"{indent}{THIN_RULE_CHAR * 72}",
+    ]
+
+    for i, (chain, ct) in enumerate(zip(chains, chain_times)):
+        step_names = " -> ".join(s.processor_name for s in chain)
+        if ct >= critical_time - 1e-9:
+            suffix = "  [critical path *]"
+        else:
+            suffix = f"  (idle {_fmt_time(critical_time - ct)})"
+        lines.append(f"{indent}  Branch {i + 1}: {step_names}")
+        lines.append(f"{indent}             chain mean: {_fmt_time(ct)}{suffix}")
+
+    lines.extend([
+        "",
+        f"{indent}Contended step-sum: {_fmt_time(contended_sum)}"
+        f"  ->  Parallel: {_fmt_time(actual_wall)}"
+        f"  |  Ratio: {contended_ratio:.2f}x",
+        f"{indent}(Step times measured under resource contention."
+        f" For true speedup, compare parallel wall time to a sequential benchmark.)",
+    ])
+
+    return lines
 
 
 def _format_step_detail(step: StepBenchmarkResult) -> List[str]:
@@ -266,16 +453,27 @@ def _format_step_detail(step: StepBenchmarkResult) -> List[str]:
     List[str]
     """
     indent = "       "
+    gpu_tag = f"GPU: {'Yes' if step.gpu_used else 'No'}"
     lines = [
         f"       [{step.step_index}] {step.processor_name}"
-        f"  (GPU: {'Yes' if step.gpu_used else 'No'})",
+        f"  ({gpu_tag})",
     ]
-    lines.extend(
-        _format_metrics_table(
-            step.wall_time_s, step.cpu_time_s, step.peak_rss_bytes,
-            indent=indent,
+    if step.concurrent:
+        # Concurrent steps: show wall/CPU per-step (accurate) but
+        # annotate memory as the shared level-wide peak.
+        lines.extend(
+            _format_metrics_table_partial(
+                step.wall_time_s, step.cpu_time_s, step.peak_rss_bytes,
+                indent=indent,
+            )
         )
-    )
+    else:
+        lines.extend(
+            _format_metrics_table(
+                step.wall_time_s, step.cpu_time_s, step.peak_rss_bytes,
+                indent=indent,
+            )
+        )
     if step.gpu_memory_bytes is not None:
         gm = step.gpu_memory_bytes
         lines.append(
@@ -329,13 +527,20 @@ def _format_record_detail(
         )
     )
 
+    lines.extend(_format_branch_chains(record))
+
     if record.step_results:
         ran = [s for s in record.step_results if not _step_was_skipped(s)]
         skipped = [s for s in record.step_results if _step_was_skipped(s)]
+        parallel = [s for s in ran if s.concurrent]
 
         lines.append("")
+        summary_parts = [f"{len(ran)} ran"]
+        if parallel:
+            summary_parts.append(f"{len(parallel)} parallel")
+        summary_parts.append(f"{len(skipped)} skipped")
         lines.append(
-            f"     Steps ({len(ran)} ran, {len(skipped)} skipped"
+            f"     Steps ({', '.join(summary_parts)}"
             f" / {len(record.step_results)} total):"
         )
         for step in record.step_results:
@@ -429,6 +634,10 @@ def _format_module_summary(records: List[BenchmarkRecord]) -> List[str]:
 def _format_overall_summary(records: List[BenchmarkRecord]) -> List[str]:
     """Build the overall summary section.
 
+    For a single record the summary shows the iteration-level spread
+    (min/max wall time and memory across iterations).  For multiple
+    records it compares across benchmarks.
+
     Parameters
     ----------
     records : List[BenchmarkRecord]
@@ -438,31 +647,61 @@ def _format_overall_summary(records: List[BenchmarkRecord]) -> List[str]:
     -------
     List[str]
     """
-    wall_means = np.array([r.total_wall_time.mean for r in records])
-    total_wall = float(np.sum(wall_means))
-    median_wall = float(np.median(wall_means))
-    mean_wall = float(np.mean(wall_means))
-
-    fastest = min(records, key=lambda r: r.total_wall_time.mean)
-    slowest = max(records, key=lambda r: r.total_wall_time.mean)
-
     lines = [
         "",
         RULE_CHAR * LINE_WIDTH,
         f"  OVERALL SUMMARY",
         RULE_CHAR * LINE_WIDTH,
         "",
-        f"  Total Benchmarks:   {len(records)}",
-        f"  Total Wall Time:    {_fmt_time(total_wall)}",
-        f"  Mean Wall Time:     {_fmt_time(mean_wall)}",
-        f"  Median Wall Time:   {_fmt_time(median_wall)}",
-        f"  Fastest:            {fastest.workflow_name} "
-        f"({_fmt_time(fastest.total_wall_time.mean)})",
-        f"  Slowest:            {slowest.workflow_name} "
-        f"({_fmt_time(slowest.total_wall_time.mean)})",
+    ]
+
+    if len(records) == 1:
+        r = records[0]
+        w = r.total_wall_time
+        c = r.total_cpu_time
+        m = r.total_peak_rss
+        lines.extend([
+            f"  Workflow:           {r.workflow_name} v{r.workflow_version}",
+            f"  Iterations:         {r.iterations}",
+            f"  Wall Time:          {_fmt_time(w.mean)} mean"
+            f"  |  {_fmt_time(w.min)} min  |  {_fmt_time(w.max)} max"
+            f"  |  {_fmt_time(w.stddev)} stddev",
+            f"  CPU Time:           {_fmt_time(c.mean)} mean"
+            f"  |  {_fmt_time(c.min)} min  |  {_fmt_time(c.max)} max"
+            f"  |  {_fmt_time(c.stddev)} stddev",
+            f"  Peak Memory:        {_fmt_bytes(m.mean)} mean"
+            f"  |  {_fmt_bytes(m.min)} min  |  {_fmt_bytes(m.max)} max",
+        ])
+    else:
+        wall_means = np.array([r.total_wall_time.mean for r in records])
+        total_wall = float(np.sum(wall_means))
+        median_wall = float(np.median(wall_means))
+        mean_wall = float(np.mean(wall_means))
+
+        fastest = min(records, key=lambda r: r.total_wall_time.mean)
+        slowest = max(records, key=lambda r: r.total_wall_time.mean)
+        least_mem = min(records, key=lambda r: r.total_peak_rss.mean)
+        most_mem = max(records, key=lambda r: r.total_peak_rss.mean)
+
+        lines.extend([
+            f"  Total Benchmarks:   {len(records)}",
+            f"  Total Wall Time:    {_fmt_time(total_wall)}",
+            f"  Mean Wall Time:     {_fmt_time(mean_wall)}",
+            f"  Median Wall Time:   {_fmt_time(median_wall)}",
+            f"  Fastest:            {fastest.workflow_name} "
+            f"({_fmt_time(fastest.total_wall_time.mean)})",
+            f"  Slowest:            {slowest.workflow_name} "
+            f"({_fmt_time(slowest.total_wall_time.mean)})",
+            f"  Least Peak Mem:     {least_mem.workflow_name} "
+            f"({_fmt_bytes(least_mem.total_peak_rss.mean)})",
+            f"  Most Peak Mem:      {most_mem.workflow_name} "
+            f"({_fmt_bytes(most_mem.total_peak_rss.mean)})",
+        ])
+
+    lines.extend([
         "",
         RULE_CHAR * LINE_WIDTH,
-    ]
+    ])
 
     return lines
 

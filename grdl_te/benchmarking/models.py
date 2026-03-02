@@ -333,6 +333,13 @@ class StepBenchmarkResult:
         GPU memory statistics, if applicable.
     sample_count : int
         Number of runs aggregated.
+    step_id : Optional[str]
+        Stable step identifier for DAG workflows.  ``None`` for
+        linear workflows or pre-existing records.
+    concurrent : bool
+        Whether this step ran concurrently with other steps.  When
+        ``True``, ``peak_rss_bytes`` is the shared level-wide peak
+        (not isolated to this step).
     """
 
     step_index: int
@@ -343,12 +350,16 @@ class StepBenchmarkResult:
     gpu_used: bool
     gpu_memory_bytes: Optional[AggregatedMetrics] = None
     sample_count: int = 0
+    step_id: Optional[str] = None
+    concurrent: bool = False
+    depends_on: Optional[List[str]] = None
 
     @classmethod
     def from_step_metrics(cls, metrics: list) -> 'StepBenchmarkResult':
         """Build from a list of grdl-runtime ``StepMetrics`` objects.
 
-        All metrics must belong to the same step (same ``step_index``).
+        All metrics must belong to the same step (same ``step_index``
+        or ``step_id``).
 
         Parameters
         ----------
@@ -362,13 +373,29 @@ class StepBenchmarkResult:
         Raises
         ------
         ValueError
-            If *metrics* is empty or step indices are inconsistent.
+            If *metrics* is empty, or metrics belong to different
+            processors (heterogeneous step_index collision).
         """
         if not metrics:
             raise ValueError("Cannot aggregate empty metrics list.")
 
         step_index = metrics[0].step_index
         processor_name = metrics[0].processor_name
+
+        # Validate all metrics come from the same processor
+        processor_names = {m.processor_name for m in metrics}
+        if len(processor_names) > 1:
+            raise ValueError(
+                f"Heterogeneous metrics detected at step_index "
+                f"{step_index}: expected one processor, got "
+                f"{processor_names}. This usually indicates a "
+                f"step_index collision in a parallel workflow."
+            )
+
+        # Extract step_id if consistently set
+        step_ids = {getattr(m, 'step_id', None) for m in metrics}
+        step_ids.discard(None)
+        step_id = step_ids.pop() if len(step_ids) == 1 else None
 
         wall_times = [m.wall_time_s for m in metrics]
         cpu_times = [m.cpu_time_s for m in metrics]
@@ -386,6 +413,8 @@ class StepBenchmarkResult:
             else None
         )
 
+        concurrent = any(getattr(m, 'concurrent', False) for m in metrics)
+
         return cls(
             step_index=step_index,
             processor_name=processor_name,
@@ -395,6 +424,8 @@ class StepBenchmarkResult:
             gpu_used=gpu_used,
             gpu_memory_bytes=gpu_mem,
             sample_count=len(metrics),
+            step_id=step_id,
+            concurrent=concurrent,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -412,7 +443,12 @@ class StepBenchmarkResult:
             "peak_rss_bytes": self.peak_rss_bytes.to_dict(),
             "gpu_used": self.gpu_used,
             "sample_count": self.sample_count,
+            "concurrent": self.concurrent,
         }
+        if self.step_id is not None:
+            d["step_id"] = self.step_id
+        if self.depends_on is not None:
+            d["depends_on"] = self.depends_on
         if self.gpu_memory_bytes is not None:
             d["gpu_memory_bytes"] = self.gpu_memory_bytes.to_dict()
         return d
@@ -442,6 +478,9 @@ class StepBenchmarkResult:
             gpu_used=data["gpu_used"],
             gpu_memory_bytes=gpu_mem,
             sample_count=data["sample_count"],
+            step_id=data.get("step_id"),
+            concurrent=data.get("concurrent", False),
+            depends_on=data.get("depends_on"),
         )
 
 

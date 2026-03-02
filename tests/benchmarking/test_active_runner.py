@@ -212,7 +212,12 @@ class TestActiveBenchmarkRunner:
         )
         record = runner.run()
 
-        assert record.tags == {"branch": "feature/x", "env": "ci"}
+        # User tags preserved; auto-populated array dimension tags also present
+        assert record.tags["branch"] == "feature/x"
+        assert record.tags["env"] == "ci"
+        assert record.tags["rows"] == "512"
+        assert record.tags["cols"] == "512"
+        assert record.tags["array_size"] == "512x512"
 
     def test_progress_callback(self):
         """Progress callback is called for each measurement iteration."""

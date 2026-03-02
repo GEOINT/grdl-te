@@ -169,23 +169,40 @@ class TestFormatReport:
         assert "DETAILED RESULTS" in report
 
     def test_contains_module_summary(self):
-        """Report includes module aggregation section."""
-        report = format_report([_make_record()])
+        """Report includes module aggregation section when multiple modules exist."""
+        r1 = _make_record(tags={"module": "mod_a", "array_size": "small",
+                                "rows": "512", "cols": "512"})
+        r2 = _make_record(tags={"module": "mod_b", "array_size": "small",
+                                "rows": "512", "cols": "512"})
+        report = format_report([r1, r2])
         assert "MODULE SUMMARY" in report
-        assert "test_module" in report
+        assert "mod_a" in report
+        assert "mod_b" in report
 
-    def test_contains_overall_summary(self):
-        """Report includes overall summary with fastest/slowest."""
+    def test_no_module_summary_single_module(self):
+        """Report omits module aggregation section with only one module."""
         report = format_report([_make_record()])
+        assert "MODULE SUMMARY" not in report
+
+    def test_contains_overall_summary_multi(self):
+        """Report includes overall summary with fastest/slowest for multi-record."""
+        records = [_make_record(), _make_record()]
+        report = format_report(records)
         assert "OVERALL SUMMARY" in report
         assert "Fastest:" in report
         assert "Slowest:" in report
         assert "Total Benchmarks:" in report
 
     def test_single_record(self):
-        """Report works correctly with exactly one record."""
+        """Single-record summary shows iteration-level statistics."""
         report = format_report([_make_record()])
-        assert "Total Benchmarks:   1" in report
+        assert "OVERALL SUMMARY" in report
+        assert "Wall Time:" in report
+        assert "CPU Time:" in report
+        assert "Peak Memory:" in report
+        # Multi-record fields should NOT appear
+        assert "Fastest:" not in report
+        assert "Total Benchmarks:" not in report
 
     def test_records_without_steps(self):
         """Records with no step_results still format cleanly."""
