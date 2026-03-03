@@ -440,6 +440,77 @@ def _format_branch_chains(record: BenchmarkRecord) -> List[str]:
     return lines
 
 
+def _format_step_memory_table(record: BenchmarkRecord) -> List[str]:
+    """Build the Direct & Descriptive memory profile table.
+
+    Emits two columns per step: "Peak Overhead (The Spike)" and
+    "End-of-Step Footprint (Live)".  Only rendered when at least one
+    step has the new memory profile fields populated.  Old benchmark
+    records that predate these fields produce an empty list.
+
+    Parameters
+    ----------
+    record : BenchmarkRecord
+
+    Returns
+    -------
+    List[str]
+    """
+    active = [s for s in record.step_results if not _step_was_skipped(s)]
+    has_new_mem = any(
+        s.peak_overhead_bytes is not None or s.end_of_step_footprint_bytes is not None
+        for s in active
+    )
+    if not has_new_mem:
+        return []
+
+    indent = "     "
+    col_step = 24
+    col_val = 32
+
+    lines = [
+        "",
+        f"{indent}MEMORY PROFILE",
+        (
+            f"{indent}{'Step Name':<{col_step}}"
+            f"{'Peak Overhead (The Spike)':>{col_val}}"
+            f"{'End-of-Step Footprint (Live)':>{col_val}}"
+        ),
+        f"{indent}{THIN_RULE_CHAR * (col_step + col_val * 2)}",
+    ]
+
+    for step in active:
+        name = step.processor_name.rsplit(".", 1)[-1]
+        if len(name) > col_step - 2:
+            name = name[: col_step - 5] + "..."
+        overhead_str = (
+            _fmt_bytes(step.peak_overhead_bytes.mean)
+            if step.peak_overhead_bytes is not None
+            else "N/A"
+        )
+        footprint_str = (
+            _fmt_bytes(step.end_of_step_footprint_bytes.mean)
+            if step.end_of_step_footprint_bytes is not None
+            else "N/A"
+        )
+        lines.append(
+            f"{indent}{name:<{col_step}}"
+            f"{overhead_str:>{col_val}}"
+            f"{footprint_str:>{col_val}}"
+        )
+
+    overall_str = _fmt_bytes(record.total_peak_rss.mean)
+    lines.extend([
+        f"{indent}{RULE_CHAR * (col_step + col_val * 2)}",
+        (
+            f"{indent}{'Overall Workflow Peak:':<{col_step}}"
+            f"{overall_str:>{col_val}}"
+            f"{'(true high-water mark)':>{col_val}}"
+        ),
+    ])
+    return lines
+
+
 def _format_step_detail(step: StepBenchmarkResult) -> List[str]:
     """Build the detail block for a single workflow step.
 
@@ -528,6 +599,7 @@ def _format_record_detail(
     )
 
     lines.extend(_format_branch_chains(record))
+    lines.extend(_format_step_memory_table(record))
 
     if record.step_results:
         ran = [s for s in record.step_results if not _step_was_skipped(s)]

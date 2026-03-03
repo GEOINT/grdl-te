@@ -353,6 +353,8 @@ class StepBenchmarkResult:
     step_id: Optional[str] = None
     concurrent: bool = False
     depends_on: Optional[List[str]] = None
+    peak_overhead_bytes: Optional[AggregatedMetrics] = None
+    end_of_step_footprint_bytes: Optional[AggregatedMetrics] = None
 
     @classmethod
     def from_step_metrics(cls, metrics: list) -> 'StepBenchmarkResult':
@@ -415,6 +417,25 @@ class StepBenchmarkResult:
 
         concurrent = any(getattr(m, 'concurrent', False) for m in metrics)
 
+        overhead_values = [
+            float(getattr(m, 'peak_overhead_bytes', 0) or 0)
+            for m in metrics
+        ]
+        footprint_values = [
+            float(getattr(m, 'end_of_step_footprint_bytes', 0) or 0)
+            for m in metrics
+        ]
+        peak_overhead = (
+            AggregatedMetrics.from_values(overhead_values)
+            if any(v > 0 for v in overhead_values)
+            else None
+        )
+        end_footprint = (
+            AggregatedMetrics.from_values(footprint_values)
+            if any(v > 0 for v in footprint_values)
+            else None
+        )
+
         return cls(
             step_index=step_index,
             processor_name=processor_name,
@@ -426,6 +447,8 @@ class StepBenchmarkResult:
             sample_count=len(metrics),
             step_id=step_id,
             concurrent=concurrent,
+            peak_overhead_bytes=peak_overhead,
+            end_of_step_footprint_bytes=end_footprint,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -451,6 +474,10 @@ class StepBenchmarkResult:
             d["depends_on"] = self.depends_on
         if self.gpu_memory_bytes is not None:
             d["gpu_memory_bytes"] = self.gpu_memory_bytes.to_dict()
+        if self.peak_overhead_bytes is not None:
+            d["peak_overhead_bytes"] = self.peak_overhead_bytes.to_dict()
+        if self.end_of_step_footprint_bytes is not None:
+            d["end_of_step_footprint_bytes"] = self.end_of_step_footprint_bytes.to_dict()
         return d
 
     @classmethod
@@ -469,6 +496,14 @@ class StepBenchmarkResult:
         if "gpu_memory_bytes" in data:
             gpu_mem = AggregatedMetrics.from_dict(data["gpu_memory_bytes"])
 
+        peak_overhead = None
+        if "peak_overhead_bytes" in data:
+            peak_overhead = AggregatedMetrics.from_dict(data["peak_overhead_bytes"])
+
+        end_footprint = None
+        if "end_of_step_footprint_bytes" in data:
+            end_footprint = AggregatedMetrics.from_dict(data["end_of_step_footprint_bytes"])
+
         return cls(
             step_index=data["step_index"],
             processor_name=data["processor_name"],
@@ -481,6 +516,8 @@ class StepBenchmarkResult:
             step_id=data.get("step_id"),
             concurrent=data.get("concurrent", False),
             depends_on=data.get("depends_on"),
+            peak_overhead_bytes=peak_overhead,
+            end_of_step_footprint_bytes=end_footprint,
         )
 
 

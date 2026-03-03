@@ -44,6 +44,18 @@ try:
 except ImportError:
     _HAS_CSI = False
 
+try:
+    import cupy as cp
+    _HAS_CUPY = True
+except ImportError:
+    _HAS_CUPY = False
+
+try:
+    from grdl.image_processing.sar import SublookDecomposition
+    _HAS_SUBLOOK = True
+except ImportError:
+    _HAS_SUBLOOK = False
+
 
 pytestmark = [
     pytest.mark.sar,
@@ -176,3 +188,90 @@ class TestCSIProcessor:
         result = csi.apply(self.chip)
         assert result.min() >= 0.0, f"CSI min {result.min():.4f} < 0"
         assert result.max() <= 1.0 + 1e-6, f"CSI max {result.max():.4f} > 1"
+
+
+# =============================================================================
+# SublookDecomposition — CuPy GPU path
+# =============================================================================
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _HAS_CUPY, reason="CuPy not installed")
+@pytest.mark.skipif(not _HAS_SUBLOOK, reason="SublookDecomposition not available")
+@pytest.mark.skipif(not _HAS_SICD, reason="SICDReader not available")
+class TestSublookDecompositionGPU:
+
+    @pytest.fixture(autouse=True)
+    def _load_chip(self, require_umbra_file):
+        with SICDReader(str(require_umbra_file)) as reader:
+            self.metadata = reader.metadata
+            shape = reader.get_shape()
+            cx, cy = shape[0] // 2, shape[1] // 2
+            half = min(256, shape[0] // 2, shape[1] // 2)
+            self.chip = reader.read_chip(cx - half, cx + half,
+                                         cy - half, cy + half)
+
+    def test_decompose_cupy_input_returns_cupy(self):
+        """decompose() with cupy input returns a cupy array."""
+        sublook = SublookDecomposition(metadata=self.metadata, num_looks=3)
+        result = sublook.decompose(cp.asarray(self.chip))
+        assert isinstance(result, cp.ndarray), (
+            f"Expected cp.ndarray, got {type(result).__name__}"
+        )
+
+    def test_decompose_cupy_shape(self):
+        """Output shape matches numpy path for cupy input."""
+        sublook = SublookDecomposition(metadata=self.metadata, num_looks=3)
+        cpu_result = sublook.decompose(self.chip)
+        gpu_result = sublook.decompose(cp.asarray(self.chip))
+        assert gpu_result.shape == cpu_result.shape, (
+            f"Shape mismatch: GPU {gpu_result.shape} vs CPU {cpu_result.shape}"
+        )
+
+    def test_decompose_cupy_matches_numpy(self):
+        """CuPy and numpy paths produce numerically identical results."""
+        sublook = SublookDecomposition(metadata=self.metadata, num_looks=3)
+        cpu_result = sublook.decompose(self.chip)
+        gpu_result = cp.asnumpy(sublook.decompose(cp.asarray(self.chip)))
+        assert np.allclose(np.abs(cpu_result), np.abs(gpu_result), atol=1e-4), (
+            "CuPy and numpy decompose() results differ beyond tolerance"
+        )
+
+
+# =============================================================================
+# CSIProcessor — CuPy GPU path
+# =============================================================================
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _HAS_CUPY, reason="CuPy not installed")
+@pytest.mark.skipif(not _HAS_CSI, reason="CSIProcessor not available")
+@pytest.mark.skipif(not _HAS_SICD, reason="SICDReader not available")
+class TestCSIProcessorGPU:
+
+    @pytest.fixture(autouse=True)
+    def _load_chip(self, require_umbra_file):
+        with SICDReader(str(require_umbra_file)) as reader:
+            self.metadata = reader.metadata
+            shape = reader.get_shape()
+            cx, cy = shape[0] // 2, shape[1] // 2
+            half = min(256, shape[0] // 2, shape[1] // 2)
+            self.chip = reader.read_chip(cx - half, cx + half,
+                                         cy - half, cy + half)
+
+    def test_csi_cupy_input_returns_cupy(self):
+        """apply() with cupy input returns a cupy array."""
+        csi = CSIProcessor(metadata=self.metadata)
+        result = csi.apply(cp.asarray(self.chip))
+        assert isinstance(result, cp.ndarray), (
+            f"Expected cp.ndarray, got {type(result).__name__}"
+        )
+
+    def test_csi_cupy_matches_numpy(self):
+        """CuPy and numpy paths produce numerically equivalent results."""
+        csi = CSIProcessor(metadata=self.metadata, normalization="percentile")
+        cpu_result = csi.apply(self.chip)
+        gpu_result = cp.asnumpy(csi.apply(cp.asarray(self.chip)))
+        assert np.allclose(cpu_result, gpu_result, atol=1e-4), (
+            "CuPy and numpy CSI apply() results differ beyond tolerance"
+        )
