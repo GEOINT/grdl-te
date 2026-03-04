@@ -212,6 +212,20 @@ class ComponentBenchmark(BenchmarkRunner):
             tags=self._tags,
         )
 
+        # Topology classification
+        from grdl_te.benchmarking.models import (
+            TopologyDescriptor,
+            WorkflowTopology,
+        )
+        record.topology = TopologyDescriptor(
+            topology=WorkflowTopology.COMPONENT,
+            sum_of_steps_wall_time_s=sum(wall_times) / len(wall_times),
+        )
+        step_result.latency_pct = 100.0
+        step_result.memory_pct = 100.0
+        record.step_latency_pct = {self._name: 100.0}
+        record.step_memory_pct = {self._name: 100.0}
+
         if self._store is not None:
             self._store.save(record)
 

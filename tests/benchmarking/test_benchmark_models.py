@@ -37,6 +37,8 @@ from grdl_te.benchmarking.models import (
     BenchmarkRecord,
     HardwareSnapshot,
     StepBenchmarkResult,
+    TopologyDescriptor,
+    WorkflowTopology,
 )
 
 # Optional: grdl-runtime types for StepBenchmarkResult.from_step_metrics
@@ -258,6 +260,18 @@ class TestStepBenchmarkResult:
 # BenchmarkRecord
 # ---------------------------------------------------------------------------
 
+# Module-level hardware cache for BenchmarkRecord tests — captured once
+# per module.  TestHardwareSnapshot tests call capture() directly.
+_CACHED_HW: "HardwareSnapshot | None" = None
+
+
+def _hw() -> HardwareSnapshot:
+    global _CACHED_HW
+    if _CACHED_HW is None:
+        _CACHED_HW = HardwareSnapshot.capture()
+    return _CACHED_HW
+
+
 class TestBenchmarkRecord:
     """Tests for BenchmarkRecord dataclass."""
 
@@ -268,7 +282,7 @@ class TestBenchmarkRecord:
             workflow_name="TestWorkflow",
             workflow_version="1.0.0",
             iterations=3,
-            hardware=HardwareSnapshot.capture(),
+            hardware=_hw(),
             total_wall_time=AggregatedMetrics.from_values([1.0, 2.0, 3.0]),
             total_cpu_time=AggregatedMetrics.from_values([0.5, 1.0, 1.5]),
             total_peak_rss=AggregatedMetrics.from_values(
@@ -336,3 +350,96 @@ class TestBenchmarkRecord:
         r1 = self._make_record()
         r2 = self._make_record()
         assert r1.benchmark_id != r2.benchmark_id
+
+    def test_topology_roundtrip(self):
+        """BenchmarkRecord with topology survives JSON round-trip."""
+        record = self._make_record()
+        record.topology = TopologyDescriptor(
+            topology=WorkflowTopology.MIXED,
+            num_branches=2,
+            critical_path_step_ids=("step_a", "step_c"),
+            critical_path_wall_time_s=4.5,
+            sum_of_steps_wall_time_s=8.0,
+            parallelism_ratio=1.78,
+        )
+        record.step_latency_pct = {"step_a": 60.0, "step_c": 40.0}
+        record.step_memory_pct = {"step_a": 50.0, "step_c": 50.0}
+
+        restored = BenchmarkRecord.from_json(record.to_json())
+
+        assert restored.topology is not None
+        assert restored.topology.topology == WorkflowTopology.MIXED
+        assert restored.topology.num_branches == 2
+        assert restored.topology.critical_path_step_ids == ("step_a", "step_c")
+        assert restored.topology.critical_path_wall_time_s == pytest.approx(4.5)
+        assert restored.topology.sum_of_steps_wall_time_s == pytest.approx(8.0)
+        assert restored.topology.parallelism_ratio == pytest.approx(1.78)
+        assert restored.step_latency_pct == {"step_a": 60.0, "step_c": 40.0}
+        assert restored.step_memory_pct == {"step_a": 50.0, "step_c": 50.0}
+
+    def test_topology_none_roundtrip(self):
+        """Record without topology survives round-trip."""
+        record = self._make_record()
+        restored = BenchmarkRecord.from_json(record.to_json())
+        assert restored.topology is None
+        assert restored.step_latency_pct == {}
+        assert restored.step_memory_pct == {}
+
+    def test_step_latency_memory_pct_roundtrip(self):
+        """StepBenchmarkResult latency_pct and memory_pct round-trip."""
+        original = StepBenchmarkResult(
+            step_index=0,
+            processor_name="TestProc",
+            wall_time_s=AggregatedMetrics.from_values([1.0]),
+            cpu_time_s=AggregatedMetrics.from_values([0.5]),
+            peak_rss_bytes=AggregatedMetrics.from_values([1000.0]),
+            gpu_used=False,
+            sample_count=1,
+            latency_pct=75.3,
+            memory_pct=42.1,
+        )
+        restored = StepBenchmarkResult.from_dict(original.to_dict())
+        assert restored.latency_pct == pytest.approx(75.3)
+        assert restored.memory_pct == pytest.approx(42.1)
+
+
+# ---------------------------------------------------------------------------
+# TopologyDescriptor
+# ---------------------------------------------------------------------------
+
+class TestTopologyDescriptor:
+    """Tests for TopologyDescriptor dataclass."""
+
+    def test_frozen(self):
+        """TopologyDescriptor is immutable."""
+        td = TopologyDescriptor(topology=WorkflowTopology.SEQUENTIAL)
+        with pytest.raises(AttributeError):
+            td.topology = WorkflowTopology.PARALLEL
+
+    def test_to_dict_from_dict_roundtrip(self):
+        """Serialization round-trip preserves all fields."""
+        original = TopologyDescriptor(
+            topology=WorkflowTopology.PARALLEL,
+            num_branches=3,
+            critical_path_step_ids=("a", "b", "c"),
+            critical_path_wall_time_s=12.5,
+            sum_of_steps_wall_time_s=25.0,
+            parallelism_ratio=2.0,
+        )
+        restored = TopologyDescriptor.from_dict(original.to_dict())
+
+        assert restored.topology == WorkflowTopology.PARALLEL
+        assert restored.num_branches == 3
+        assert restored.critical_path_step_ids == ("a", "b", "c")
+        assert restored.critical_path_wall_time_s == pytest.approx(12.5)
+        assert restored.sum_of_steps_wall_time_s == pytest.approx(25.0)
+        assert restored.parallelism_ratio == pytest.approx(2.0)
+
+    def test_defaults(self):
+        """Default values are sensible."""
+        td = TopologyDescriptor(topology=WorkflowTopology.COMPONENT)
+        assert td.num_branches == 0
+        assert td.critical_path_step_ids == ()
+        assert td.critical_path_wall_time_s == 0.0
+        assert td.sum_of_steps_wall_time_s == 0.0
+        assert td.parallelism_ratio == 1.0
