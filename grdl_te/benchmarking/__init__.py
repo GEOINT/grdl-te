@@ -29,12 +29,25 @@ from grdl_te.benchmarking.models import (
     BenchmarkRecord,
     HardwareSnapshot,
     StepBenchmarkResult,
+    TopologyDescriptor,
+    WorkflowTopology,
 )
 from grdl_te.benchmarking.base import BenchmarkRunner, BenchmarkStore
 from grdl_te.benchmarking.source import ARRAY_SIZES, BenchmarkSource
 from grdl_te.benchmarking.store import JSONBenchmarkStore
 from grdl_te.benchmarking.component import ComponentBenchmark, as_pytest_benchmark
 from grdl_te.benchmarking.report import format_report, print_report, save_report
+from grdl_te.benchmarking.report_md import format_report_md, save_report_md
+from grdl_te.benchmarking.topology import (
+    classify_topology,
+    compute_critical_path,
+    compute_latency_contributions,
+    compute_memory_contributions,
+)
+from grdl_te.benchmarking.comparison import (
+    ComparisonResult,
+    compare_records,
+)
 from grdl_te.benchmarking.suite import run_suite
 
 __all__ = [
@@ -45,15 +58,26 @@ __all__ = [
     "BenchmarkRunner",
     "BenchmarkSource",
     "BenchmarkStore",
+    "ComparisonResult",
     "ComponentBenchmark",
     "HardwareSnapshot",
     "JSONBenchmarkStore",
     "StepBenchmarkResult",
+
+    "TopologyDescriptor",
+    "WorkflowTopology",
     "as_pytest_benchmark",
+    "classify_topology",
+    "compare_records",
+    "compute_critical_path",
+    "compute_latency_contributions",
+    "compute_memory_contributions",
     "format_report",
+    "format_report_md",
     "print_report",
     "run_suite",
     "save_report",
+    "save_report_md",
 ]
 
 

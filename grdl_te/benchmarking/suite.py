@@ -2496,4 +2496,12 @@ def run_suite(
             all_results.append(wf_result)
 
     print_summary(all_results)
+
+    # Generate Markdown report alongside text output
+    if all_results:
+        from grdl_te.benchmarking.report_md import save_report_md
+        report_dir = store._base_dir if store_dir is None else store_dir
+        md_path = save_report_md(all_results, report_dir / "report.md")
+        print(f"\n  Markdown report: {md_path}")
+
     return all_results

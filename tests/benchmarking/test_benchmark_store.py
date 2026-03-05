@@ -36,6 +36,18 @@ from grdl_te.benchmarking.models import (
 from grdl_te.benchmarking.store import JSONBenchmarkStore
 
 
+# Module-level hardware cache — captured once per module to avoid
+# redundant OS/platform calls across ~10 tests.
+_CACHED_HW: "HardwareSnapshot | None" = None
+
+
+def _hw() -> HardwareSnapshot:
+    global _CACHED_HW
+    if _CACHED_HW is None:
+        _CACHED_HW = HardwareSnapshot.capture()
+    return _CACHED_HW
+
+
 def _make_record(
     workflow_name: str = "TestWorkflow",
     benchmark_type: str = "active",
@@ -47,7 +59,7 @@ def _make_record(
         workflow_name=workflow_name,
         workflow_version=version,
         iterations=3,
-        hardware=HardwareSnapshot.capture(),
+        hardware=_hw(),
         total_wall_time=AggregatedMetrics.from_values([1.0, 2.0, 3.0]),
         total_cpu_time=AggregatedMetrics.from_values([0.5, 1.0, 1.5]),
         total_peak_rss=AggregatedMetrics.from_values(

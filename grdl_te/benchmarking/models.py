@@ -41,6 +41,7 @@ import sys
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 # Third-party
@@ -54,6 +55,103 @@ try:
     _HAS_RUNTIME = True
 except ImportError:
     _HAS_RUNTIME = False
+
+
+class WorkflowTopology(Enum):
+    """Classification of workflow execution topology.
+
+    Attributes
+    ----------
+    COMPONENT : str
+        Single callable benchmarked in isolation.
+    SEQUENTIAL : str
+        Linear step chain with no parallel branches.
+    PARALLEL : str
+        DAG with concurrent branches.
+    MIXED : str
+        Combination of sequential and parallel sections.
+    """
+
+    COMPONENT = "component"
+    SEQUENTIAL = "sequential"
+    PARALLEL = "parallel"
+    MIXED = "mixed"
+
+
+@dataclass(frozen=True)
+class TopologyDescriptor:
+    """Structural metadata describing a workflow's execution graph.
+
+    Computed post-hoc from ``BenchmarkRecord`` step results after
+    all iterations complete.  The critical path is the dependency
+    chain with the longest accumulated wall time (not the most
+    steps).
+
+    Attributes
+    ----------
+    topology : WorkflowTopology
+        Classification of the execution pattern.
+    num_branches : int
+        Number of parallel root branches (0 for sequential/component).
+    critical_path_step_ids : tuple
+        Ordered step IDs along the critical path.
+    critical_path_wall_time_s : float
+        Sum of mean wall times along the critical path.
+    sum_of_steps_wall_time_s : float
+        Sum of all step mean wall times (hypothetical sequential time).
+    parallelism_ratio : float
+        ``sum_of_steps / actual_wall_time``.  1.0 = purely sequential.
+    """
+
+    topology: WorkflowTopology
+    num_branches: int = 0
+    critical_path_step_ids: tuple = ()
+    critical_path_wall_time_s: float = 0.0
+    sum_of_steps_wall_time_s: float = 0.0
+    parallelism_ratio: float = 1.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary.
+
+        Returns
+        -------
+        Dict[str, Any]
+        """
+        return {
+            "topology": self.topology.value,
+            "num_branches": self.num_branches,
+            "critical_path_step_ids": list(self.critical_path_step_ids),
+            "critical_path_wall_time_s": self.critical_path_wall_time_s,
+            "sum_of_steps_wall_time_s": self.sum_of_steps_wall_time_s,
+            "parallelism_ratio": self.parallelism_ratio,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TopologyDescriptor':
+        """Deserialize from dictionary.
+
+        Parameters
+        ----------
+        data : Dict[str, Any]
+
+        Returns
+        -------
+        TopologyDescriptor
+        """
+        return cls(
+            topology=WorkflowTopology(data["topology"]),
+            num_branches=data.get("num_branches", 0),
+            critical_path_step_ids=tuple(
+                data.get("critical_path_step_ids", ())
+            ),
+            critical_path_wall_time_s=data.get(
+                "critical_path_wall_time_s", 0.0
+            ),
+            sum_of_steps_wall_time_s=data.get(
+                "sum_of_steps_wall_time_s", 0.0
+            ),
+            parallelism_ratio=data.get("parallelism_ratio", 1.0),
+        )
 
 
 @dataclass(frozen=True)
@@ -340,6 +438,16 @@ class StepBenchmarkResult:
         Whether this step ran concurrently with other steps.  When
         ``True``, ``peak_rss_bytes`` is the shared level-wide peak
         (not isolated to this step).
+    latency_pct : float
+        Percentage contribution to total workflow wall-clock time.
+        For sequential steps: ``step_wall / total_wall * 100``.
+        For non-critical parallel steps: ``0.0`` (hidden by the
+        critical path).  Populated by topology analysis.
+    memory_pct : float
+        Percentage contribution to workflow peak memory.  All steps
+        contribute regardless of whether they are on the critical
+        path — memory is process-wide.  Populated by topology
+        analysis.
     """
 
     step_index: int
@@ -355,6 +463,8 @@ class StepBenchmarkResult:
     depends_on: Optional[List[str]] = None
     peak_overhead_bytes: Optional[AggregatedMetrics] = None
     end_of_step_footprint_bytes: Optional[AggregatedMetrics] = None
+    latency_pct: float = 0.0
+    memory_pct: float = 0.0
 
     @classmethod
     def from_step_metrics(cls, metrics: list) -> 'StepBenchmarkResult':
@@ -467,6 +577,8 @@ class StepBenchmarkResult:
             "gpu_used": self.gpu_used,
             "sample_count": self.sample_count,
             "concurrent": self.concurrent,
+            "latency_pct": self.latency_pct,
+            "memory_pct": self.memory_pct,
         }
         if self.step_id is not None:
             d["step_id"] = self.step_id
@@ -518,6 +630,8 @@ class StepBenchmarkResult:
             depends_on=data.get("depends_on"),
             peak_overhead_bytes=peak_overhead,
             end_of_step_footprint_bytes=end_footprint,
+            latency_pct=data.get("latency_pct", 0.0),
+            memory_pct=data.get("memory_pct", 0.0),
         )
 
 
@@ -558,6 +672,17 @@ class BenchmarkRecord:
         ISO 8601 UTC timestamp.
     metadata : Dict[str, Any]
         Arbitrary extra information.
+    topology : Optional[TopologyDescriptor]
+        Workflow execution topology classification and critical-path
+        data.  Populated automatically by benchmark runners after
+        all iterations complete.  ``None`` for records created before
+        topology analysis was available.
+    step_latency_pct : Dict[str, float]
+        Per-step latency contribution percentages, keyed by step_id
+        (or ``"__idx_N"`` for linear workflows).
+    step_memory_pct : Dict[str, float]
+        Per-step memory contribution percentages, keyed by step_id
+        (or ``"__idx_N"`` for linear workflows).
     """
 
     benchmark_id: str
@@ -574,6 +699,9 @@ class BenchmarkRecord:
     tags: Dict[str, str] = field(default_factory=dict)
     created_at: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
+    topology: Optional[TopologyDescriptor] = None
+    step_latency_pct: Dict[str, float] = field(default_factory=dict)
+    step_memory_pct: Dict[str, float] = field(default_factory=dict)
 
     @classmethod
     def create(
@@ -648,7 +776,7 @@ class BenchmarkRecord:
         -------
         Dict[str, Any]
         """
-        return {
+        d: Dict[str, Any] = {
             "benchmark_id": self.benchmark_id,
             "benchmark_type": self.benchmark_type,
             "workflow_name": self.workflow_name,
@@ -664,6 +792,13 @@ class BenchmarkRecord:
             "created_at": self.created_at,
             "metadata": self.metadata,
         }
+        if self.topology is not None:
+            d["topology"] = self.topology.to_dict()
+        if self.step_latency_pct:
+            d["step_latency_pct"] = self.step_latency_pct
+        if self.step_memory_pct:
+            d["step_memory_pct"] = self.step_memory_pct
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'BenchmarkRecord':
@@ -677,6 +812,13 @@ class BenchmarkRecord:
         -------
         BenchmarkRecord
         """
+        topo_data = data.get("topology")
+        topology = (
+            TopologyDescriptor.from_dict(topo_data)
+            if topo_data is not None
+            else None
+        )
+
         return cls(
             benchmark_id=data["benchmark_id"],
             benchmark_type=data["benchmark_type"],
@@ -701,6 +843,9 @@ class BenchmarkRecord:
             tags=data.get("tags", {}),
             created_at=data.get("created_at", ""),
             metadata=data.get("metadata", {}),
+            topology=topology,
+            step_latency_pct=data.get("step_latency_pct", {}),
+            step_memory_pct=data.get("step_memory_pct", {}),
         )
 
     def to_json(self, indent: int = 2) -> str:

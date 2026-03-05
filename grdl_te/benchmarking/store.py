@@ -82,6 +82,10 @@ class JSONBenchmarkStore(BenchmarkStore):
         record_path.write_text(record.to_json(), encoding="utf-8")
 
         index = self._read_index()
+        topo_str = None
+        if record.topology is not None:
+            topo_str = record.topology.topology.value
+
         index.append({
             "benchmark_id": record.benchmark_id,
             "benchmark_type": record.benchmark_type,
@@ -89,6 +93,7 @@ class JSONBenchmarkStore(BenchmarkStore):
             "workflow_version": record.workflow_version,
             "iterations": record.iterations,
             "created_at": record.created_at,
+            "topology": topo_str,
         })
         self._write_index(index)
 
@@ -123,6 +128,7 @@ class JSONBenchmarkStore(BenchmarkStore):
         self,
         workflow_name: Optional[str] = None,
         benchmark_type: Optional[str] = None,
+        topology: Optional[str] = None,
         limit: int = 50,
     ) -> List[BenchmarkRecord]:
         """List benchmark records, optionally filtered.
@@ -136,6 +142,9 @@ class JSONBenchmarkStore(BenchmarkStore):
             Filter by workflow name.
         benchmark_type : str, optional
             Filter by benchmark type.
+        topology : str, optional
+            Filter by topology type (e.g., ``"sequential"``,
+            ``"parallel"``, ``"mixed"``, ``"component"``).
         limit : int
             Maximum records to return.  Default 50.
 
@@ -154,6 +163,8 @@ class JSONBenchmarkStore(BenchmarkStore):
             if workflow_name and entry.get("workflow_name") != workflow_name:
                 continue
             if benchmark_type and entry.get("benchmark_type") != benchmark_type:
+                continue
+            if topology and entry.get("topology") != topology:
                 continue
             filtered.append(entry)
             if len(filtered) >= limit:
@@ -211,6 +222,10 @@ class JSONBenchmarkStore(BenchmarkStore):
                 record = BenchmarkRecord.from_json(
                     path.read_text(encoding="utf-8")
                 )
+                topo_str = None
+                if record.topology is not None:
+                    topo_str = record.topology.topology.value
+
                 entries.append({
                     "benchmark_id": record.benchmark_id,
                     "benchmark_type": record.benchmark_type,
@@ -218,6 +233,7 @@ class JSONBenchmarkStore(BenchmarkStore):
                     "workflow_version": record.workflow_version,
                     "iterations": record.iterations,
                     "created_at": record.created_at,
+                    "topology": topo_str,
                 })
             except (json.JSONDecodeError, KeyError):
                 continue  # skip corrupted files

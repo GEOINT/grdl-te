@@ -259,6 +259,21 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
             tags=merged_tags,
         )
 
+        # Topology classification and contribution analysis
+        from grdl_te.benchmarking.topology import (
+            classify_topology,
+            compute_latency_contributions,
+            compute_memory_contributions,
+        )
+        topo = classify_topology(record)
+        record.topology = topo
+        record.step_latency_pct = compute_latency_contributions(record, topo)
+        record.step_memory_pct = compute_memory_contributions(record)
+        for sr in record.step_results:
+            key = sr.step_id or f"__idx_{sr.step_index}"
+            sr.latency_pct = record.step_latency_pct.get(key, 0.0)
+            sr.memory_pct = record.step_memory_pct.get(key, 0.0)
+
         if self._store is not None:
             self._store.save(record)
 
