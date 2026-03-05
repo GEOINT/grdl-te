@@ -46,7 +46,6 @@ from grdl_te.benchmarking.topology import (
 )
 from grdl_te.benchmarking.comparison import (
     ComparisonResult,
-    StepComparison,
     compare_records,
 )
 from grdl_te.benchmarking.suite import run_suite
@@ -64,7 +63,7 @@ __all__ = [
     "HardwareSnapshot",
     "JSONBenchmarkStore",
     "StepBenchmarkResult",
-    "StepComparison",
+
     "TopologyDescriptor",
     "WorkflowTopology",
     "as_pytest_benchmark",

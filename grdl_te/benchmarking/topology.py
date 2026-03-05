@@ -339,11 +339,14 @@ def compute_memory_contributions(
 ) -> Dict[str, float]:
     """Compute each step's percentage contribution to peak memory.
 
-    All steps contribute regardless of whether they are on the
-    critical path — memory is process-wide.  For concurrent steps,
-    the ``peak_rss_bytes`` is the shared level-wide peak and is
-    attributed to each step in that level with a ``(shared)``
-    annotation in reports.
+    Uses ``peak_overhead_bytes`` (the transient spike: peak minus
+    live allocation after eviction) as the per-step metric, divided
+    by the workflow's overall tracemalloc peak.  This gives a
+    meaningful per-step attribution: steps that allocate large
+    temporary buffers score high, while lightweight steps score low.
+
+    Falls back to ``peak_rss_bytes`` for records that lack
+    ``peak_overhead_bytes`` data (e.g. older serialized results).
 
     Parameters
     ----------
@@ -364,7 +367,10 @@ def compute_memory_contributions(
 
     result: Dict[str, float] = {}
     for s in active:
-        pct = (s.peak_rss_bytes.mean / workflow_peak) * 100.0
+        if s.peak_overhead_bytes is not None and s.peak_overhead_bytes.mean > 0:
+            pct = (s.peak_overhead_bytes.mean / workflow_peak) * 100.0
+        else:
+            pct = (s.peak_rss_bytes.mean / workflow_peak) * 100.0
         result[_step_key(s)] = pct
 
     return result

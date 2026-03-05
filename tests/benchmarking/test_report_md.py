@@ -210,8 +210,8 @@ class TestFormatReportMd:
 
         assert "## Comparison" in md
         assert "Workflow Summary" in md
-        assert "Step Comparison" in md
-        assert "Speedup Matrix" in md
+        assert "Step Comparison" not in md
+        assert "Speedup Matrix" not in md
         assert "WorkflowA" in md
         assert "WorkflowB" in md
 
@@ -335,7 +335,7 @@ class TestFormatReportMd:
         assert "Overall Workflow Peak" in md
 
     def test_memory_profile_concurrent_shared_annotation(self):
-        """Concurrent steps show '(shared)' annotation in Memory Profile."""
+        """Concurrent steps show '(concurrent)' annotation in Memory Profile."""
         steps = [
             StepBenchmarkResult(
                 step_index=0,
@@ -378,7 +378,7 @@ class TestFormatReportMd:
         md = format_report_md([rec])
 
         assert "Memory Profile" in md
-        assert "(shared)" in md
+        assert "(concurrent)" in md
 
     def test_memory_profile_absent_without_overhead(self):
         """Memory Profile section is absent when no steps have overhead data."""

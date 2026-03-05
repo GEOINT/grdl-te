@@ -17,7 +17,7 @@ Created
 
 Modified
 --------
-2026-03-04
+2026-03-05
 """
 
 # Third-party
@@ -30,11 +30,7 @@ from grdl_te.benchmarking.models import (
     HardwareSnapshot,
     StepBenchmarkResult,
 )
-from grdl_te.benchmarking.comparison import (
-    ComparisonResult,
-    StepComparison,
-    compare_records,
-)
+from grdl_te.benchmarking.comparison import compare_records
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +105,6 @@ class TestCompareRecords:
         """Empty list returns empty ComparisonResult."""
         result = compare_records([])
         assert result.record_labels == []
-        assert result.step_comparisons == []
         assert result.bottlenecks == []
 
     def test_single_record(self):
@@ -118,27 +113,6 @@ class TestCompareRecords:
         result = compare_records([rec])
         assert len(result.record_labels) == 1
         assert result.record_labels[0] == "WF1"
-        assert len(result.step_comparisons) == 1
-        assert result.step_comparisons[0].step_name == "StepA"
-
-    def test_two_records_step_matching(self):
-        """Steps are matched across records by short processor name."""
-        rec_a = _record("Fast", [
-            _step(0, "mod.StepA", wall=1.0),
-            _step(1, "mod.StepB", wall=2.0),
-        ])
-        rec_b = _record("Slow", [
-            _step(0, "pkg.StepA", wall=3.0),
-            _step(1, "pkg.StepB", wall=4.0),
-        ])
-        result = compare_records([rec_a, rec_b])
-
-        assert len(result.record_labels) == 2
-        assert len(result.step_comparisons) == 2
-
-        step_names = {sc.step_name for sc in result.step_comparisons}
-        assert "StepA" in step_names
-        assert "StepB" in step_names
 
     def test_wall_time_summary(self):
         """Wall time summary maps labels to total wall mean."""
@@ -148,28 +122,6 @@ class TestCompareRecords:
 
         assert result.wall_time_summary["WF1"] == pytest.approx(5.0)
         assert result.wall_time_summary["WF2"] == pytest.approx(10.0)
-
-    def test_speedup_matrix(self):
-        """Speedup ratio computed correctly: A_vs_B = A.wall / B.wall."""
-        rec_a = _record("WF1", [_step(0, "S", wall=10.0)], total_wall=10.0)
-        rec_b = _record("WF2", [_step(0, "S", wall=5.0)], total_wall=5.0)
-        result = compare_records([rec_a, rec_b])
-
-        assert "WF1_vs_WF2" in result.speedup_matrix
-        assert result.speedup_matrix["WF1_vs_WF2"] == pytest.approx(2.0)
-
-    def test_wall_time_deltas(self):
-        """Pairwise wall time delta percentages computed."""
-        rec_a = _record("A", [_step(0, "proc.Step", wall=10.0)])
-        rec_b = _record("B", [_step(0, "pkg.Step", wall=15.0)])
-        result = compare_records([rec_a, rec_b])
-
-        sc = result.step_comparisons[0]
-        assert sc.step_name == "Step"
-        # (15 - 10) / 10 * 100 = 50%
-        deltas = list(sc.wall_time_deltas.values())
-        assert len(deltas) == 1
-        assert deltas[0] == pytest.approx(50.0)
 
     def test_bottleneck_ranking(self):
         """Bottlenecks ranked by latency_pct descending."""
@@ -205,7 +157,7 @@ class TestCompareRecords:
         assert result.record_labels[1] == "Pipeline (2)"
 
     def test_skipped_steps_excluded(self):
-        """Skipped steps (zero wall+cpu) are excluded from comparisons."""
+        """Skipped steps (zero wall+cpu) are excluded from bottlenecks."""
         rec = _record("WF", [
             _step(0, "Active", wall=1.0),
             StepBenchmarkResult(
@@ -218,20 +170,8 @@ class TestCompareRecords:
                 sample_count=1,
             ),
         ])
+        rec.step_results[0].latency_pct = 100.0
         result = compare_records([rec])
-        step_names = {sc.step_name for sc in result.step_comparisons}
+        step_names = {b["step_name"] for b in result.bottlenecks}
         assert "Active" in step_names
         assert "Skipped" not in step_names
-
-    def test_three_records(self):
-        """Three-way comparison produces correct speedup matrix."""
-        rec_a = _record("A", [_step(0, "S", wall=10.0)], total_wall=10.0)
-        rec_b = _record("B", [_step(0, "S", wall=5.0)], total_wall=5.0)
-        rec_c = _record("C", [_step(0, "S", wall=2.0)], total_wall=2.0)
-        result = compare_records([rec_a, rec_b, rec_c])
-
-        assert len(result.record_labels) == 3
-        assert "A_vs_B" in result.speedup_matrix
-        assert "A_vs_C" in result.speedup_matrix
-        assert "B_vs_C" in result.speedup_matrix
-        assert result.speedup_matrix["A_vs_C"] == pytest.approx(5.0)

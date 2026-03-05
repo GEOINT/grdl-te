@@ -257,7 +257,7 @@ def _format_metrics_table_partial(
     """Build a statistics table for a concurrent step.
 
     Wall and CPU rows are shown normally.  The memory row shows only
-    the mean value with a ``(shared)`` annotation because per-step
+    the mean value with a ``(concurrent)`` annotation because per-step
     memory cannot be isolated when threads share a process.
 
     Parameters
@@ -306,7 +306,7 @@ def _format_metrics_table_partial(
         sep,
         _row("Wall (s)", wall),
         _row("CPU  (s)", cpu),
-        f"{indent}{'Mem':12s}  {mem_str:>10s}  (shared across parallel steps)",
+        f"{indent}{'Mem':12s}  {mem_str:>10s}  (concurrent — shared across parallel steps)",
     ]
 
 

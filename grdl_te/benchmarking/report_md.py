@@ -375,7 +375,7 @@ def _md_memory_profile(record: BenchmarkRecord) -> str:
         )
         mem_str = f"{step.memory_pct:.1f}%"
         if step.concurrent:
-            mem_str += " (shared)"
+            mem_str += " (concurrent)"
         lines.append(
             f"| `{name}` | {overhead} | {footprint} | {mem_str} |"
         )
@@ -440,63 +440,6 @@ def _md_comparison_section(comparison: ComparisonResult) -> str:
             f"{_fmt_bytes(rec.total_peak_rss.mean)} | {active_count} |"
         )
     lines.append("")
-
-    # Step deltas
-    if comparison.step_comparisons:
-        lines.append("### Step Comparison\n")
-        # Build header dynamically from record labels
-        header = "| Step |"
-        sep = "|------|"
-        for label in comparison.record_labels:
-            header += f" {label} Wall |"
-            sep += "------------|"
-        if len(comparison.record_labels) == 2:
-            header += " Delta% |"
-            sep += "--------|"
-        lines.append(header)
-        lines.append(sep)
-
-        for sc in comparison.step_comparisons:
-            row = f"| `{sc.step_name}` |"
-            for label in comparison.record_labels:
-                if label in sc.records:
-                    row += f" {_fmt_time(sc.records[label].wall_time_s.mean)} |"
-                else:
-                    row += " -- |"
-            if len(comparison.record_labels) == 2 and sc.wall_time_deltas:
-                delta = list(sc.wall_time_deltas.values())[0]
-                sign = "+" if delta > 0 else ""
-                row += f" {sign}{delta:.1f}% |"
-            lines.append(row)
-        lines.append("")
-
-    # Speedup matrix
-    if comparison.speedup_matrix and len(comparison.record_labels) >= 2:
-        lines.append("### Speedup Matrix\n")
-        labels = comparison.record_labels
-        header = "| |" + " | ".join(labels) + " |"
-        sep = "|---|" + " | ".join(["---"] * len(labels)) + " |"
-        lines.append(header)
-        lines.append(sep)
-
-        for la in labels:
-            row = f"| **{la}** |"
-            for lb in labels:
-                if la == lb:
-                    row += " -- |"
-                else:
-                    key = f"{la}_vs_{lb}"
-                    alt_key = f"{lb}_vs_{la}"
-                    if key in comparison.speedup_matrix:
-                        val = comparison.speedup_matrix[key]
-                        row += f" {val:.2f}x |"
-                    elif alt_key in comparison.speedup_matrix:
-                        val = 1.0 / comparison.speedup_matrix[alt_key]
-                        row += f" {val:.2f}x |"
-                    else:
-                        row += " -- |"
-            lines.append(row)
-        lines.append("")
 
     return "\n".join(lines)
 

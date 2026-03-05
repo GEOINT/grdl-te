@@ -293,13 +293,10 @@ class TestParallelEndToEnd:
         assert rec_seq.topology.topology == WorkflowTopology.SEQUENTIAL
         assert rec_fast.topology.topology == WorkflowTopology.SEQUENTIAL
 
-        # Speedup should be 2x
-        assert comparison.speedup_matrix["Sequential_vs_Optimized"] == pytest.approx(2.0)
-
         # Report should have comparison section
         md = format_report_md([rec_seq, rec_fast], comparison=comparison)
         assert "## Comparison" in md
-        assert "Speedup Matrix" in md
+        assert "Workflow Summary" in md
         assert "Sequential" in md
         assert "Optimized" in md
 
