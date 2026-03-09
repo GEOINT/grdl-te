@@ -61,6 +61,12 @@ except ImportError:
     _HAS_ORTHO = False
 
 try:
+    from grdl.image_processing.ortho.enu_grid import ENUGrid
+    _HAS_ENU = True
+except ImportError:
+    _HAS_ENU = False
+
+try:
     from grdl.geolocation import AffineGeolocation
     _HAS_GEO = True
 except ImportError:
@@ -451,3 +457,236 @@ class TestComputeOutputResolution:
             compute_output_resolution(
                 metadata={'pixel_size_x': 10.0, 'pixel_size_y': 10.0},
             )
+
+
+# ---------------------------------------------------------------------------
+# ENUGrid integration
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(not _HAS_ENU, reason="ENUGrid not available")
+class TestENUGridIntegration:
+    """Validate ENUGrid as a drop-in replacement for OutputGrid in
+    Orthorectifier and OrthoPipeline.
+
+    All tests use the same synthetic AffineGeolocation fixture as the
+    existing ortho tests (no real imagery required).
+    """
+
+    def test_orthorectifier_accepts_enu_grid(self, synthetic_ortho_setup):
+        """Orthorectifier constructs and runs with an ENUGrid output specification.
+
+        ENUGrid is documented as a drop-in for OutputGrid.  If construction
+        raises or apply() fails, the polymorphic contract is broken.
+        """
+        image, geo, _, _ = synthetic_ortho_setup
+        enu_grid = ENUGrid.from_geolocation(
+            geo, pixel_size_m=10.0, ref_alt=0.0,
+        )
+        ortho = Orthorectifier(
+            geolocation=geo, output_grid=enu_grid, interpolation='bilinear',
+        )
+        ortho.compute_mapping()
+        result = ortho.apply(image)
+
+        assert isinstance(result, np.ndarray), (
+            "Orthorectifier.apply() with ENUGrid must return ndarray"
+        )
+        assert result.shape == (enu_grid.rows, enu_grid.cols), (
+            f"Output shape {result.shape} must match ENUGrid dimensions "
+            f"({enu_grid.rows}, {enu_grid.cols})"
+        )
+
+    def test_orthorectifier_enu_output_has_valid_pixels(self, synthetic_ortho_setup):
+        """ENUGrid orthorectification produces at least some non-nodata pixels.
+
+        An all-nodata output means the mapping failed: the grid bounds
+        do not overlap the source image footprint.
+        """
+        image, geo, _, _ = synthetic_ortho_setup
+        enu_grid = ENUGrid.from_geolocation(
+            geo, pixel_size_m=10.0, ref_alt=0.0,
+        )
+        ortho = Orthorectifier(
+            geolocation=geo, output_grid=enu_grid, interpolation='bilinear',
+        )
+        result = ortho.apply(image)
+
+        valid_count = np.sum(result != 0.0)
+        assert valid_count > 0, (
+            "ENUGrid orthorectification returned all-nodata output — "
+            "grid bounds do not overlap the source image footprint"
+        )
+
+    def test_ortho_pipeline_with_enu_builder(self, synthetic_ortho_setup):
+        """OrthoPipeline.with_enu_grid() executes and returns OrthoResult."""
+        image, geo, _, _ = synthetic_ortho_setup
+        result = (
+            OrthoPipeline()
+            .with_source_array(image)
+            .with_geolocation(geo)
+            .with_enu_grid(pixel_size_m=10.0)
+            .run()
+        )
+        assert isinstance(result, OrthoResult), (
+            "OrthoPipeline.with_enu_grid().run() must return OrthoResult"
+        )
+
+    def test_enu_result_is_enu_flag(self, synthetic_ortho_setup):
+        """OrthoResult.is_enu is True when the pipeline used with_enu_grid()."""
+        image, geo, _, _ = synthetic_ortho_setup
+        result = (
+            OrthoPipeline()
+            .with_source_array(image)
+            .with_geolocation(geo)
+            .with_enu_grid(pixel_size_m=10.0)
+            .run()
+        )
+        assert result.is_enu is True, (
+            "OrthoResult.is_enu should be True when output grid is ENUGrid"
+        )
+
+    def test_standard_pipeline_is_not_enu(self, synthetic_ortho_setup):
+        """OrthoResult.is_enu is False for a standard geographic OutputGrid pipeline."""
+        image, geo, _, _ = synthetic_ortho_setup
+        result = (
+            OrthoPipeline()
+            .with_source_array(image)
+            .with_geolocation(geo)
+            .with_resolution(0.00054, 0.00054)
+            .run()
+        )
+        assert result.is_enu is False, (
+            "OrthoResult.is_enu should be False for standard geographic OutputGrid"
+        )
+
+    def test_enu_result_pixel_size_meters(self, synthetic_ortho_setup):
+        """OrthoResult.pixel_size_meters returns the configured pixel size."""
+        image, geo, _, _ = synthetic_ortho_setup
+        result = (
+            OrthoPipeline()
+            .with_source_array(image)
+            .with_geolocation(geo)
+            .with_enu_grid(pixel_size_m=15.0)
+            .run()
+        )
+        sizes = result.pixel_size_meters
+        assert sizes is not None, "pixel_size_meters must not be None for ENU result"
+        assert len(sizes) == 2, "pixel_size_meters must be a 2-tuple (east, north)"
+        assert sizes[0] == pytest.approx(15.0, rel=1e-6), (
+            f"pixel_size_meters east = {sizes[0]:.4f} m, expected 15.0 m"
+        )
+        assert sizes[1] == pytest.approx(15.0, rel=1e-6), (
+            f"pixel_size_meters north = {sizes[1]:.4f} m, expected 15.0 m"
+        )
+
+    def test_enu_result_bounds_meters_are_finite(self, synthetic_ortho_setup):
+        """OrthoResult.bounds_meters returns finite (min_east, min_north, max_east, max_north)."""
+        image, geo, _, _ = synthetic_ortho_setup
+        result = (
+            OrthoPipeline()
+            .with_source_array(image)
+            .with_geolocation(geo)
+            .with_enu_grid(pixel_size_m=10.0)
+            .run()
+        )
+        bounds = result.bounds_meters
+        assert bounds is not None, "bounds_meters must not be None for ENU result"
+        assert len(bounds) == 4, "bounds_meters must be a 4-tuple"
+        assert all(
+            isinstance(v, float) and np.isfinite(v) for v in bounds
+        ), f"bounds_meters contains non-finite values: {bounds}"
+        min_east, min_north, max_east, max_north = bounds
+        assert max_east > min_east, "bounds_meters: max_east must exceed min_east"
+        assert max_north > min_north, "bounds_meters: max_north must exceed min_north"
+
+    def test_enu_geolocation_metadata_crs_key(self, synthetic_ortho_setup):
+        """geolocation_metadata['crs'] is 'ENU' for an ENU output."""
+        image, geo, _, _ = synthetic_ortho_setup
+        result = (
+            OrthoPipeline()
+            .with_source_array(image)
+            .with_geolocation(geo)
+            .with_enu_grid(pixel_size_m=10.0)
+            .run()
+        )
+        meta = result.geolocation_metadata
+        assert 'crs' in meta, "geolocation_metadata must contain 'crs' key"
+        assert meta['crs'] == 'ENU', (
+            f"geolocation_metadata['crs'] = {meta['crs']!r}, expected 'ENU'"
+        )
+
+    def test_enu_geolocation_metadata_transform_key(self, synthetic_ortho_setup):
+        """geolocation_metadata['transform'] is a 6-tuple for ENU output."""
+        image, geo, _, _ = synthetic_ortho_setup
+        result = (
+            OrthoPipeline()
+            .with_source_array(image)
+            .with_geolocation(geo)
+            .with_enu_grid(pixel_size_m=10.0)
+            .run()
+        )
+        meta = result.geolocation_metadata
+        assert 'transform' in meta, "geolocation_metadata must contain 'transform' key"
+        t = meta['transform']
+        assert len(t) == 6, (
+            f"geolocation_metadata['transform'] must be a 6-tuple, got length {len(t)}"
+        )
+        assert all(np.isfinite(v) for v in t), (
+            f"geolocation_metadata['transform'] contains non-finite values: {t}"
+        )
+
+    def test_with_enu_grid_then_with_output_grid_uses_explicit_grid(self, synthetic_ortho_setup):
+        """with_output_grid() called after with_enu_grid() overrides ENU params.
+
+        The pipeline should honour the last explicit grid specification.
+        """
+        image, geo, _, _ = synthetic_ortho_setup
+        explicit_grid = OutputGrid.from_geolocation(
+            geo, pixel_size_lat=0.00054, pixel_size_lon=0.00054,
+        )
+        result = (
+            OrthoPipeline()
+            .with_source_array(image)
+            .with_geolocation(geo)
+            .with_enu_grid(pixel_size_m=10.0)    # set ENU
+            .with_output_grid(explicit_grid)       # override with geographic grid
+            .run()
+        )
+        # with_output_grid takes priority → result must not be ENU
+        assert result.is_enu is False, (
+            "with_output_grid() should override with_enu_grid() when called last; "
+            "expected is_enu=False"
+        )
+
+    @pytest.mark.integration
+    def test_parallel_compute_mapping_produces_valid_pixels(self, synthetic_ortho_setup):
+        """Parallel compute_mapping (>1M pixel grids) covers valid image region.
+
+        Creates an ENUGrid large enough to exceed the 1M pixel threshold
+        (_PARALLEL_THRESHOLD = 1_000_000) so that _compute_mapping_parallel
+        is exercised.  Verifies valid pixels > 0 and output shape is correct.
+        """
+        image, geo, _, _ = synthetic_ortho_setup
+        # Force a large-enough ENUGrid: 1024 x 1024 = 1M pixels exactly.
+        # Use a coarser pixel size to keep this small in extent.
+        enu_grid = ENUGrid.from_geolocation(
+            geo, pixel_size_m=2.5, ref_alt=0.0,
+        )
+        # Only run if the grid is large enough to trigger parallel path
+        if enu_grid.rows * enu_grid.cols < 1_000_000:
+            pytest.skip(
+                f"Generated ENUGrid ({enu_grid.rows}×{enu_grid.cols}) is too small "
+                "to trigger parallel compute_mapping; increase pixel_size_m or extent"
+            )
+
+        ortho = Orthorectifier(
+            geolocation=geo, output_grid=enu_grid, interpolation='nearest',
+        )
+        src_rows, src_cols, valid_mask = ortho.compute_mapping()
+
+        assert src_rows.shape == (enu_grid.rows, enu_grid.cols), (
+            f"Parallel compute_mapping source_rows shape {src_rows.shape} != "
+            f"expected ({enu_grid.rows}, {enu_grid.cols})"
+        )
+        assert valid_mask.sum() > 0, (
+            "Parallel compute_mapping produced zero valid pixels"
+        )
