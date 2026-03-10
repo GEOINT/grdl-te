@@ -83,14 +83,14 @@ class TestDualPolHAlphaLevel1:
         """decompose() returns a dictionary."""
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
-        result = halpha.decompose(co, cross)
+        result = halpha.decompose_dual(co, cross)
         assert isinstance(result, dict)
 
     def test_decompose_has_expected_keys(self, synthetic_dual_pol):
         """Output dict has entropy, alpha, anisotropy, span."""
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
-        result = halpha.decompose(co, cross)
+        result = halpha.decompose_dual(co, cross)
         for key in ('entropy', 'alpha', 'anisotropy', 'span'):
             assert key in result, f"Missing key: {key}"
 
@@ -98,7 +98,7 @@ class TestDualPolHAlphaLevel1:
         """All output arrays match input shape."""
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
-        result = halpha.decompose(co, cross)
+        result = halpha.decompose_dual(co, cross)
         for key in ('entropy', 'alpha', 'anisotropy', 'span'):
             assert result[key].shape == co.shape, (
                 f"{key} shape {result[key].shape} != input shape {co.shape}"
@@ -108,7 +108,7 @@ class TestDualPolHAlphaLevel1:
         """Output arrays are real-valued float."""
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
-        result = halpha.decompose(co, cross)
+        result = halpha.decompose_dual(co, cross)
         for key in ('entropy', 'alpha', 'anisotropy', 'span'):
             assert np.isrealobj(result[key])
             assert result[key].dtype in (np.float32, np.float64)
@@ -129,7 +129,7 @@ class TestDualPolHAlphaLevel2:
         """Entropy is in [0, 1]."""
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
-        result = halpha.decompose(co, cross)
+        result = halpha.decompose_dual(co, cross)
         H = result['entropy']
         assert np.all(H >= -1e-10), f"Entropy min = {H.min()}"
         assert np.all(H <= 1.0 + 1e-10), f"Entropy max = {H.max()}"
@@ -138,7 +138,7 @@ class TestDualPolHAlphaLevel2:
         """Alpha angle is in [0, 90] degrees."""
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
-        result = halpha.decompose(co, cross)
+        result = halpha.decompose_dual(co, cross)
         alpha = result['alpha']
         assert np.all(alpha >= -1e-6), f"Alpha min = {alpha.min()}"
         assert np.all(alpha <= 90.0 + 1e-6), f"Alpha max = {alpha.max()}"
@@ -147,7 +147,7 @@ class TestDualPolHAlphaLevel2:
         """Anisotropy is in [0, 1]."""
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
-        result = halpha.decompose(co, cross)
+        result = halpha.decompose_dual(co, cross)
         A = result['anisotropy']
         assert np.all(A >= -1e-10), f"Anisotropy min = {A.min()}"
         assert np.all(A <= 1.0 + 1e-10), f"Anisotropy max = {A.max()}"
@@ -165,7 +165,7 @@ class TestDualPolHAlphaLevel2:
         """
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
-        result = halpha.decompose(co, cross)
+        result = halpha.decompose_dual(co, cross)
         span = result['span']
 
         expected_mean_power = (
@@ -204,7 +204,7 @@ class TestDualPolHAlphaLevel2:
         """
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=11)
-        result = halpha.decompose(co, cross)
+        result = halpha.decompose_dual(co, cross)
         margin = 15
         mean_H = np.mean(result['entropy'][margin:-margin, margin:-margin])
         assert 0.35 < mean_H < 0.50, (
@@ -228,8 +228,8 @@ class TestDualPolHAlphaLevel2:
         halpha_small = DualPolHAlpha(window_size=3)
         halpha_large = DualPolHAlpha(window_size=15)
         margin = 20
-        H_small = halpha_small.decompose(co, cross)['entropy']
-        H_large = halpha_large.decompose(co, cross)['entropy']
+        H_small = halpha_small.decompose_dual(co, cross)['entropy']
+        H_large = halpha_large.decompose_dual(co, cross)['entropy']
 
         var_small = np.var(H_small[margin:-margin, margin:-margin])
         var_large = np.var(H_large[margin:-margin, margin:-margin])
@@ -246,7 +246,7 @@ class TestDualPolHAlphaLevel2:
         """All output arrays contain finite values."""
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
-        result = halpha.decompose(co, cross)
+        result = halpha.decompose_dual(co, cross)
         for key in ('entropy', 'alpha', 'anisotropy', 'span'):
             assert np.all(np.isfinite(result[key])), (
                 f"{key} has non-finite values"
@@ -277,7 +277,7 @@ class TestDualPolHAlphaLevel3:
         ).astype(np.complex64)
         cross_zero = np.zeros((rows, cols), dtype=np.complex64)
 
-        result = halpha.decompose(co, cross_zero)
+        result = halpha.decompose_dual(co, cross_zero)
         margin = 10
         interior_H = result['entropy'][margin:-margin, margin:-margin]
 
@@ -310,7 +310,7 @@ class TestDualPolHAlphaLevel3:
         ).astype(np.complex64)
         cross_zero = np.zeros((rows, cols), dtype=np.complex64)
 
-        result = halpha.decompose(co, cross_zero)
+        result = halpha.decompose_dual(co, cross_zero)
         margin = 10
         mean_alpha = np.mean(
             result['alpha'][margin:-margin, margin:-margin]
@@ -326,7 +326,7 @@ class TestDualPolHAlphaLevel3:
         """to_rgb() returns (3, rows, cols) channels-first array."""
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
-        components = halpha.decompose(co, cross)
+        components = halpha.decompose_dual(co, cross)
         rgb = halpha.to_rgb(components)
         assert rgb.shape == (3, co.shape[0], co.shape[1])
 
@@ -335,7 +335,7 @@ class TestDualPolHAlphaLevel3:
         """to_rgb() returns float32."""
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
-        components = halpha.decompose(co, cross)
+        components = halpha.decompose_dual(co, cross)
         rgb = halpha.to_rgb(components)
         assert rgb.dtype == np.float32
 
@@ -344,7 +344,7 @@ class TestDualPolHAlphaLevel3:
         """to_rgb() values are in [0, 1]."""
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
-        components = halpha.decompose(co, cross)
+        components = halpha.decompose_dual(co, cross)
         rgb = halpha.to_rgb(components)
         assert rgb.min() >= -1e-6, f"RGB min = {rgb.min()}"
         assert rgb.max() <= 1.0 + 1e-6, f"RGB max = {rgb.max()}"
@@ -360,7 +360,7 @@ class TestDualPolHAlphaLevel3:
         """
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
-        components = halpha.decompose(co, cross)
+        components = halpha.decompose_dual(co, cross)
         rgb = halpha.to_rgb(components)
 
         for ch, name in enumerate(('R', 'G', 'B')):
@@ -395,14 +395,14 @@ class TestDualPolHAlphaEdgeCases:
         co = np.ones((10, 10), dtype=np.complex64)
         cross = np.ones((10, 20), dtype=np.complex64)
         with pytest.raises(ValueError):
-            halpha.decompose(co, cross)
+            halpha.decompose_dual(co, cross)
 
     def test_real_input_raises(self):
         """Non-complex input raises TypeError."""
         halpha = DualPolHAlpha()
         real = np.ones((10, 10), dtype=np.float32)
         with pytest.raises(TypeError):
-            halpha.decompose(real, real)
+            halpha.decompose_dual(real, real)
 
     def test_window_size_odd_required(self):
         """Even window_size should raise or be adjusted."""
@@ -414,7 +414,7 @@ class TestDualPolHAlphaEdgeCases:
             rng = np.random.default_rng(0)
             co = (rng.standard_normal((32, 32)) + 1j * rng.standard_normal((32, 32))).astype(np.complex64)
             cross = (rng.standard_normal((32, 32)) + 1j * rng.standard_normal((32, 32))).astype(np.complex64)
-            result = halpha.decompose(co, cross)
+            result = halpha.decompose_dual(co, cross)
             assert 'entropy' in result
         except (ValueError, Exception):
             pass  # Raising is also acceptable
