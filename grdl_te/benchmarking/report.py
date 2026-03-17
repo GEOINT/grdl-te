@@ -809,7 +809,10 @@ def format_report(records: List[BenchmarkRecord]) -> str:
     lines: List[str] = []
 
     lines.extend(_format_header(len(records)))
-    lines.extend(_format_hardware(records[0].hardware))
+    if records[0].hardware is not None:
+        lines.extend(_format_hardware(records[0].hardware))
+    else:
+        lines.append("Hardware:        [information missing — traces predate hardware capture]")
     lines.extend(_format_configuration(records))
 
     # Sort by wall time descending (slowest first)

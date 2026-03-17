@@ -654,8 +654,11 @@ class BenchmarkRecord:
         Version string.
     iterations : int
         Number of measurement iterations.
-    hardware : HardwareSnapshot
-        Hardware state at benchmark time.
+    hardware : HardwareSnapshot, optional
+        Hardware state at benchmark time.  ``None`` for passive (forensic)
+        records when the original traces have no embedded hardware
+        information (runs produced before forensic benchmarking support
+        was added, or traces from mixed hostnames).
     total_wall_time : AggregatedMetrics
         Workflow-level wall-clock time statistics.
     total_cpu_time : AggregatedMetrics
@@ -690,7 +693,7 @@ class BenchmarkRecord:
     workflow_name: str
     workflow_version: str
     iterations: int
-    hardware: HardwareSnapshot
+    hardware: Optional[HardwareSnapshot]
     total_wall_time: AggregatedMetrics
     total_cpu_time: AggregatedMetrics
     total_peak_rss: AggregatedMetrics
@@ -710,7 +713,7 @@ class BenchmarkRecord:
         workflow_name: str,
         workflow_version: str,
         iterations: int,
-        hardware: HardwareSnapshot,
+        hardware: Optional[HardwareSnapshot],
         total_wall_time: AggregatedMetrics,
         total_cpu_time: AggregatedMetrics,
         total_peak_rss: AggregatedMetrics,
@@ -731,8 +734,9 @@ class BenchmarkRecord:
             Version string.
         iterations : int
             Number of measurement iterations.
-        hardware : HardwareSnapshot
-            Hardware snapshot.
+        hardware : HardwareSnapshot, optional
+            Hardware snapshot.  Pass ``None`` for forensic records when
+            the original hardware is unavailable.
         total_wall_time : AggregatedMetrics
             Overall wall-clock time stats.
         total_cpu_time : AggregatedMetrics
@@ -782,7 +786,7 @@ class BenchmarkRecord:
             "workflow_name": self.workflow_name,
             "workflow_version": self.workflow_version,
             "iterations": self.iterations,
-            "hardware": self.hardware.to_dict(),
+            "hardware": self.hardware.to_dict() if self.hardware is not None else None,
             "total_wall_time": self.total_wall_time.to_dict(),
             "total_cpu_time": self.total_cpu_time.to_dict(),
             "total_peak_rss": self.total_peak_rss.to_dict(),
@@ -825,7 +829,11 @@ class BenchmarkRecord:
             workflow_name=data["workflow_name"],
             workflow_version=data["workflow_version"],
             iterations=data["iterations"],
-            hardware=HardwareSnapshot.from_dict(data["hardware"]),
+            hardware=(
+                HardwareSnapshot.from_dict(data["hardware"])
+                if data.get("hardware") is not None
+                else None
+            ),
             total_wall_time=AggregatedMetrics.from_dict(
                 data["total_wall_time"]
             ),

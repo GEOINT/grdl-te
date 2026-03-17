@@ -545,7 +545,10 @@ def format_report_md(
     parts.append("---\n")
     parts.append(_md_executive_summary(records, comparison))
     parts.append("---\n")
-    parts.append(_md_hardware(records[0].hardware))
+    if records[0].hardware is not None:
+        parts.append(_md_hardware(records[0].hardware))
+    else:
+        parts.append("## Hardware\n\n> Hardware information missing.\n")
     parts.append(_md_configuration(records))
     parts.append("---\n")
 
