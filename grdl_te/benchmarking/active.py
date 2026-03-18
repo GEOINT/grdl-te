@@ -29,7 +29,6 @@ Modified
 """
 
 # Standard library
-from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional
 
 # Optional: grdl-runtime
@@ -42,12 +41,15 @@ except ImportError:
     _HAS_RUNTIME = False
 
 # Internal
+from grdl_te.benchmarking._aggregation import (
+    aggregate_step_metrics,
+    aggregate_workflow_totals,
+    apply_topology_and_contributions,
+)
 from grdl_te.benchmarking.base import BenchmarkRunner, BenchmarkStore
 from grdl_te.benchmarking.models import (
-    AggregatedMetrics,
     BenchmarkRecord,
     HardwareSnapshot,
-    StepBenchmarkResult,
 )
 from grdl_te.benchmarking.source import BenchmarkSource
 
@@ -191,33 +193,12 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
             if progress_callback is not None:
                 progress_callback(i + 1, self._iterations)
 
-        # Aggregate workflow-level metrics
-        total_wall_times = [m.total_wall_time_s for m in all_workflow_metrics]
-        total_cpu_times = [m.total_cpu_time_s for m in all_workflow_metrics]
-        total_peak_rss = [float(m.peak_rss_bytes) for m in all_workflow_metrics]
-
-        # Aggregate per-step metrics.
-        # Prefer step_id (set by DAG executors) for deterministic grouping
-        # of parallel steps.  Fall back to step_index for backward
-        # compatibility with linear workflows that don't set step_id.
-        def _step_key(sm: Any) -> str:
-            if getattr(sm, "step_id", None) is not None:
-                return sm.step_id
-            return f"__idx_{sm.step_index}"
-
-        steps_by_key: Dict[str, List[Any]] = defaultdict(list)
-        for wf_metrics in all_workflow_metrics:
-            for sm in wf_metrics.step_metrics:
-                steps_by_key[_step_key(sm)].append(sm)
-
-        step_results = [
-            StepBenchmarkResult.from_step_metrics(metrics)
-            for _, metrics in steps_by_key.items()
-        ]
-        # Sort by topological step_index (execution order), not
-        # alphabetical step_id, so reports display steps in the
-        # order they actually run.
-        step_results.sort(key=lambda s: s.step_index)
+        # Aggregate workflow-level and per-step metrics via shared functions.
+        # PassiveBenchmarkRunner uses the same calls, guaranteeing parity.
+        total_wall, total_cpu, total_rss = aggregate_workflow_totals(
+            all_workflow_metrics
+        )
+        step_results = aggregate_step_metrics(all_workflow_metrics)
 
         # Inject step dependency graph from the workflow so the report can
         # reconstruct branch chains (which sequential steps follow which
@@ -251,28 +232,15 @@ class ActiveBenchmarkRunner(BenchmarkRunner):
             workflow_version=wf_version,
             iterations=self._iterations,
             hardware=hardware,
-            total_wall_time=AggregatedMetrics.from_values(total_wall_times),
-            total_cpu_time=AggregatedMetrics.from_values(total_cpu_times),
-            total_peak_rss=AggregatedMetrics.from_values(total_peak_rss),
+            total_wall_time=total_wall,
+            total_cpu_time=total_cpu,
+            total_peak_rss=total_rss,
             step_results=step_results,
             raw_metrics=raw_metrics,
             tags=merged_tags,
         )
 
-        # Topology classification and contribution analysis
-        from grdl_te.benchmarking.topology import (
-            classify_topology,
-            compute_latency_contributions,
-            compute_memory_contributions,
-        )
-        topo = classify_topology(record)
-        record.topology = topo
-        record.step_latency_pct = compute_latency_contributions(record, topo)
-        record.step_memory_pct = compute_memory_contributions(record)
-        for sr in record.step_results:
-            key = sr.step_id or f"__idx_{sr.step_index}"
-            sr.latency_pct = record.step_latency_pct.get(key, 0.0)
-            sr.memory_pct = record.step_memory_pct.get(key, 0.0)
+        apply_topology_and_contributions(record)
 
         if self._store is not None:
             self._store.save(record)

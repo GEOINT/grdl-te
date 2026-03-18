@@ -360,7 +360,6 @@ class TestBenchmarkRecord:
             critical_path_step_ids=("step_a", "step_c"),
             critical_path_wall_time_s=4.5,
             sum_of_steps_wall_time_s=8.0,
-            parallelism_ratio=1.78,
         )
         record.step_latency_pct = {"step_a": 60.0, "step_c": 40.0}
         record.step_memory_pct = {"step_a": 50.0, "step_c": 50.0}
@@ -373,7 +372,6 @@ class TestBenchmarkRecord:
         assert restored.topology.critical_path_step_ids == ("step_a", "step_c")
         assert restored.topology.critical_path_wall_time_s == pytest.approx(4.5)
         assert restored.topology.sum_of_steps_wall_time_s == pytest.approx(8.0)
-        assert restored.topology.parallelism_ratio == pytest.approx(1.78)
         assert restored.step_latency_pct == {"step_a": 60.0, "step_c": 40.0}
         assert restored.step_memory_pct == {"step_a": 50.0, "step_c": 50.0}
 
@@ -424,7 +422,6 @@ class TestTopologyDescriptor:
             critical_path_step_ids=("a", "b", "c"),
             critical_path_wall_time_s=12.5,
             sum_of_steps_wall_time_s=25.0,
-            parallelism_ratio=2.0,
         )
         restored = TopologyDescriptor.from_dict(original.to_dict())
 
@@ -433,7 +430,6 @@ class TestTopologyDescriptor:
         assert restored.critical_path_step_ids == ("a", "b", "c")
         assert restored.critical_path_wall_time_s == pytest.approx(12.5)
         assert restored.sum_of_steps_wall_time_s == pytest.approx(25.0)
-        assert restored.parallelism_ratio == pytest.approx(2.0)
 
     def test_defaults(self):
         """Default values are sensible."""
@@ -442,4 +438,3 @@ class TestTopologyDescriptor:
         assert td.critical_path_step_ids == ()
         assert td.critical_path_wall_time_s == 0.0
         assert td.sum_of_steps_wall_time_s == 0.0
-        assert td.parallelism_ratio == 1.0

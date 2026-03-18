@@ -98,9 +98,7 @@ class TopologyDescriptor:
     critical_path_wall_time_s : float
         Sum of mean wall times along the critical path.
     sum_of_steps_wall_time_s : float
-        Sum of all step mean wall times (hypothetical sequential time).
-    parallelism_ratio : float
-        ``sum_of_steps / actual_wall_time``.  1.0 = purely sequential.
+        Sum of all step mean wall times measured under contention.
     """
 
     topology: WorkflowTopology
@@ -108,7 +106,6 @@ class TopologyDescriptor:
     critical_path_step_ids: tuple = ()
     critical_path_wall_time_s: float = 0.0
     sum_of_steps_wall_time_s: float = 0.0
-    parallelism_ratio: float = 1.0
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary.
@@ -123,7 +120,6 @@ class TopologyDescriptor:
             "critical_path_step_ids": list(self.critical_path_step_ids),
             "critical_path_wall_time_s": self.critical_path_wall_time_s,
             "sum_of_steps_wall_time_s": self.sum_of_steps_wall_time_s,
-            "parallelism_ratio": self.parallelism_ratio,
         }
 
     @classmethod
@@ -150,7 +146,6 @@ class TopologyDescriptor:
             sum_of_steps_wall_time_s=data.get(
                 "sum_of_steps_wall_time_s", 0.0
             ),
-            parallelism_ratio=data.get("parallelism_ratio", 1.0),
         )
 
 
@@ -654,8 +649,11 @@ class BenchmarkRecord:
         Version string.
     iterations : int
         Number of measurement iterations.
-    hardware : HardwareSnapshot
-        Hardware state at benchmark time.
+    hardware : HardwareSnapshot, optional
+        Hardware state at benchmark time.  ``None`` for passive (forensic)
+        records when the original traces have no embedded hardware
+        information (runs produced before forensic benchmarking support
+        was added, or traces from mixed hostnames).
     total_wall_time : AggregatedMetrics
         Workflow-level wall-clock time statistics.
     total_cpu_time : AggregatedMetrics
@@ -690,7 +688,7 @@ class BenchmarkRecord:
     workflow_name: str
     workflow_version: str
     iterations: int
-    hardware: HardwareSnapshot
+    hardware: Optional[HardwareSnapshot]
     total_wall_time: AggregatedMetrics
     total_cpu_time: AggregatedMetrics
     total_peak_rss: AggregatedMetrics
@@ -710,7 +708,7 @@ class BenchmarkRecord:
         workflow_name: str,
         workflow_version: str,
         iterations: int,
-        hardware: HardwareSnapshot,
+        hardware: Optional[HardwareSnapshot],
         total_wall_time: AggregatedMetrics,
         total_cpu_time: AggregatedMetrics,
         total_peak_rss: AggregatedMetrics,
@@ -731,8 +729,9 @@ class BenchmarkRecord:
             Version string.
         iterations : int
             Number of measurement iterations.
-        hardware : HardwareSnapshot
-            Hardware snapshot.
+        hardware : HardwareSnapshot, optional
+            Hardware snapshot.  Pass ``None`` for forensic records when
+            the original hardware is unavailable.
         total_wall_time : AggregatedMetrics
             Overall wall-clock time stats.
         total_cpu_time : AggregatedMetrics
@@ -782,7 +781,7 @@ class BenchmarkRecord:
             "workflow_name": self.workflow_name,
             "workflow_version": self.workflow_version,
             "iterations": self.iterations,
-            "hardware": self.hardware.to_dict(),
+            "hardware": self.hardware.to_dict() if self.hardware is not None else None,
             "total_wall_time": self.total_wall_time.to_dict(),
             "total_cpu_time": self.total_cpu_time.to_dict(),
             "total_peak_rss": self.total_peak_rss.to_dict(),
@@ -825,7 +824,11 @@ class BenchmarkRecord:
             workflow_name=data["workflow_name"],
             workflow_version=data["workflow_version"],
             iterations=data["iterations"],
-            hardware=HardwareSnapshot.from_dict(data["hardware"]),
+            hardware=(
+                HardwareSnapshot.from_dict(data["hardware"])
+                if data.get("hardware") is not None
+                else None
+            ),
             total_wall_time=AggregatedMetrics.from_dict(
                 data["total_wall_time"]
             ),

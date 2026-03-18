@@ -156,16 +156,13 @@ def _md_executive_summary(
         lines.append("| Rank | Step | Latency % | Memory % | Workflow | Mean Wall |")
         lines.append("|------|------|-----------|----------|----------|-----------|")
         for i, bn in enumerate(bns, 1):
-            lat = f"{bn['latency_pct']:.1f}%"
-            if bn["latency_pct"] == 0.0:
-                lat += "*"
+            lat = "--" if bn["latency_pct"] == 0.0 else f"{bn['latency_pct']:.1f}%"
             lines.append(
                 f"| {i} | `{bn['step_name']}` | {lat} | "
                 f"{bn['memory_pct']:.1f}% | {bn['workflow']} | "
                 f"{_fmt_time(bn['wall_time_s'])} |"
             )
         lines.append("")
-        lines.append("*\\* Wall time hidden by critical path (parallel execution)*\n")
 
     return "\n".join(lines)
 
@@ -211,50 +208,61 @@ def _md_step_table(record: BenchmarkRecord) -> str:
     """Build per-step performance table with latency% and memory%."""
     active = [s for s in record.step_results if not _step_was_skipped(s)]
     skipped = [s for s in record.step_results if _step_was_skipped(s)]
+    parallel = [s for s in active if s.concurrent]
 
     lines = ["#### Step Performance\n"]
 
-    # Summary line
-    summary_parts = [f"{len(active)} ran"]
-    parallel = [s for s in active if s.concurrent]
-    if parallel:
-        summary_parts.append(f"{len(parallel)} parallel")
-    summary_parts.append(f"{len(skipped)} skipped")
-    lines.append(
-        f"*{', '.join(summary_parts)} / "
-        f"{len(record.step_results)} total*\n"
-    )
-
-    lines.append(
-        "| # | Step | Mean | Median | StdDev | P95 | Min | Max | "
-        "Latency% | Memory% | Path |"
-    )
-    lines.append(
-        "|---|------|------|--------|--------|-----|-----|-----|"
-        "----------|---------|------|"
-    )
+    # Summary line — only shown when there is something to say
+    # (skipped steps or a parallel sub-count to report).
+    if skipped or parallel:
+        summary_parts = [f"{len(active)} ran"]
+        if parallel:
+            summary_parts.append(f"{len(parallel)} parallel")
+        if skipped:
+            summary_parts.append(f"{len(skipped)} skipped")
+        lines.append(
+            f"*{', '.join(summary_parts)} / "
+            f"{len(record.step_results)} total*\n"
+        )
 
     # Determine critical path set
     cp_set = set()
     if record.topology:
         cp_set = set(record.topology.critical_path_step_ids)
 
+    is_single_run = record.iterations == 1
+
+    if is_single_run:
+        lines.append("| # | Step | Wall Time | Latency% | Memory% | Path |")
+        lines.append("|---|------|-----------|----------|---------|------|")
+    else:
+        lines.append(
+            "| # | Step | Mean | Median | StdDev | Min | Max | "
+            "Latency% | Memory% | Path |"
+        )
+        lines.append(
+            "|---|------|------|--------|--------|-----|-----|"
+            "----------|---------|------|"
+        )
+
     for step in record.step_results:
         if _step_was_skipped(step):
-            lines.append(
-                f"| {step.step_index} | `{_short_name(step.processor_name)}` "
-                f"| -- | -- | -- | -- | -- | -- | -- | -- | *skipped* |"
-            )
+            if is_single_run:
+                lines.append(
+                    f"| {step.step_index} | `{_short_name(step.processor_name)}` "
+                    f"| -- | -- | -- | *skipped* |"
+                )
+            else:
+                lines.append(
+                    f"| {step.step_index} | `{_short_name(step.processor_name)}` "
+                    f"| -- | -- | -- | -- | -- | -- | -- | *skipped* |"
+                )
             continue
 
         w = step.wall_time_s
-        lat = f"{step.latency_pct:.1f}%"
-        if step.latency_pct == 0.0 and step.concurrent:
-            lat += "*"
-
-        mem = f"{step.memory_pct:.1f}%"
+        mean_str = _fmt_time(w.mean)
         if step.concurrent:
-            mem += "†"
+            mean_str += " ‡"
 
         # Path label
         key = step.step_id or f"__idx_{step.step_index}"
@@ -265,25 +273,43 @@ def _md_step_table(record: BenchmarkRecord) -> str:
         else:
             path = "sequential"
 
-        lines.append(
-            f"| {step.step_index} | `{_short_name(step.processor_name)}` "
-            f"| {_fmt_time(w.mean)} | {_fmt_time(w.median)} | "
-            f"{_fmt_time(w.stddev)} | {_fmt_time(w.p95)} | "
-            f"{_fmt_time(w.min)} | {_fmt_time(w.max)} | "
-            f"{lat} | {mem} | {path} |"
-        )
+        # Latency%: non-critical concurrent steps show -- (their wall time is
+        # hidden by the critical path — showing 0% would be misleading).
+        if step.concurrent and key not in cp_set:
+            lat = "--"
+        else:
+            lat = f"{step.latency_pct:.1f}%"
+
+        mem = f"{step.memory_pct:.1f}%"
+        if step.concurrent:
+            mem += "†"
+
+        if is_single_run:
+            lines.append(
+                f"| {step.step_index} | `{_short_name(step.processor_name)}` "
+                f"| {mean_str} | {lat} | {mem} | {path} |"
+            )
+        else:
+            lines.append(
+                f"| {step.step_index} | `{_short_name(step.processor_name)}` "
+                f"| {mean_str} | {_fmt_time(w.median)} | "
+                f"{_fmt_time(w.stddev)} | "
+                f"{_fmt_time(w.min)} | {_fmt_time(w.max)} | "
+                f"{lat} | {mem} | {path} |"
+            )
 
     lines.append("")
 
-    # Footnotes
-    has_parallel = any(s.concurrent for s in active)
+    # Footnotes — only for concurrent steps
+    has_parallel = bool(parallel)
     if has_parallel:
         lines.append(
-            "*\\* Wall time hidden by critical path (parallel execution)*"
+            "*† Memory shared across concurrent steps "
+            "(tracemalloc is process-wide)*"
         )
         lines.append(
-            "*† Memory shared across concurrent steps "
-            "(tracemalloc is process-wide)*\n"
+            "*‡ Wall time measured under resource contention — "
+            "not comparable to isolated standalone execution time.*\n"
         )
 
     return "\n".join(lines)
@@ -302,9 +328,12 @@ def _md_time_decomposition(record: BenchmarkRecord) -> str:
     lines.append("|--------|-------|")
     lines.append(f"| Wall Clock (actual elapsed) | {_fmt_time(record.total_wall_time.mean)} |")
     lines.append(f"| Critical Path (longest chain) | {_fmt_time(topo.critical_path_wall_time_s)} |")
-    lines.append(f"| Sum of Steps (if sequential) | {_fmt_time(topo.sum_of_steps_wall_time_s)} |")
-    lines.append(f"| Parallelism Ratio | {topo.parallelism_ratio:.2f}x |")
+    lines.append(f"| Contended Step Sum ‡ | {_fmt_time(topo.sum_of_steps_wall_time_s)} |")
     lines.append("")
+    lines.append(
+        "*‡ Step times were measured under resource contention — "
+        "not a valid sequential baseline.*\n"
+    )
 
     return "\n".join(lines)
 
@@ -456,20 +485,25 @@ def _md_overall_summary(records: List[BenchmarkRecord]) -> str:
         lines.append(
             f"**Workflow**: {r.workflow_name} v{r.workflow_version}\n"
         )
-        lines.append(
-            f"- **Wall Time**: {_fmt_time(w.mean)} mean | "
-            f"{_fmt_time(w.min)} min | {_fmt_time(w.max)} max | "
-            f"{_fmt_time(w.stddev)} stddev"
-        )
-        lines.append(
-            f"- **CPU Time**: {_fmt_time(c.mean)} mean | "
-            f"{_fmt_time(c.min)} min | {_fmt_time(c.max)} max | "
-            f"{_fmt_time(c.stddev)} stddev"
-        )
-        lines.append(
-            f"- **Peak Memory**: {_fmt_bytes(m.mean)} mean | "
-            f"{_fmt_bytes(m.min)} min | {_fmt_bytes(m.max)} max"
-        )
+        if r.iterations == 1:
+            lines.append(f"- **Wall Time**: {_fmt_time(w.mean)}")
+            lines.append(f"- **CPU Time**: {_fmt_time(c.mean)}")
+            lines.append(f"- **Peak Memory**: {_fmt_bytes(m.mean)}")
+        else:
+            lines.append(
+                f"- **Wall Time**: {_fmt_time(w.mean)} mean | "
+                f"{_fmt_time(w.min)} min | {_fmt_time(w.max)} max | "
+                f"{_fmt_time(w.stddev)} stddev"
+            )
+            lines.append(
+                f"- **CPU Time**: {_fmt_time(c.mean)} mean | "
+                f"{_fmt_time(c.min)} min | {_fmt_time(c.max)} max | "
+                f"{_fmt_time(c.stddev)} stddev"
+            )
+            lines.append(
+                f"- **Peak Memory**: {_fmt_bytes(m.mean)} mean | "
+                f"{_fmt_bytes(m.min)} min | {_fmt_bytes(m.max)} max"
+            )
     else:
         wall_means = [r.total_wall_time.mean for r in records]
         total_wall = sum(wall_means)
@@ -545,7 +579,10 @@ def format_report_md(
     parts.append("---\n")
     parts.append(_md_executive_summary(records, comparison))
     parts.append("---\n")
-    parts.append(_md_hardware(records[0].hardware))
+    if records[0].hardware is not None:
+        parts.append(_md_hardware(records[0].hardware))
+    else:
+        parts.append("## Hardware\n\n> Hardware information missing.\n")
     parts.append(_md_configuration(records))
     parts.append("---\n")
 
