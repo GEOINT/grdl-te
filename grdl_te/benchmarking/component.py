@@ -67,6 +67,10 @@ class ComponentBenchmark(BenchmarkRunner):
         Number of measurement iterations.  Default 10.
     warmup : int
         Number of warmup iterations (discarded).  Default 2.
+    array_shape : tuple of int, optional
+        ``(rows, cols)`` dimensions of the input array.  When provided,
+        ``array_size``, ``rows``, and ``cols`` tags are auto-populated
+        — consistent with ``ActiveBenchmarkRunner``.
     store : BenchmarkStore, optional
         If provided, result is persisted automatically.
     tags : Dict[str, str], optional
@@ -105,6 +109,7 @@ class ComponentBenchmark(BenchmarkRunner):
         teardown: Optional[Callable[[], None]] = None,
         iterations: int = 10,
         warmup: int = 2,
+        array_shape: Optional[Tuple[int, ...]] = None,
         store: Optional[BenchmarkStore] = None,
         tags: Optional[Dict[str, str]] = None,
         version: str = "0.0.0",
@@ -120,6 +125,7 @@ class ComponentBenchmark(BenchmarkRunner):
         self._teardown = teardown
         self._iterations = iterations
         self._warmup = warmup
+        self._array_shape = array_shape
         self._store = store
         self._tags = tags or {}
         self._version = version
@@ -198,6 +204,16 @@ class ComponentBenchmark(BenchmarkRunner):
             sample_count=self._iterations,
         )
 
+        # Auto-populate array dimension tags from array_shape (matches
+        # ActiveBenchmarkRunner behaviour with BenchmarkSource).
+        merged_tags = dict(self._tags)
+        if self._array_shape is not None and len(self._array_shape) >= 2:
+            merged_tags.setdefault("rows", str(self._array_shape[0]))
+            merged_tags.setdefault("cols", str(self._array_shape[1]))
+            merged_tags.setdefault(
+                "array_size", f"{self._array_shape[0]}x{self._array_shape[1]}"
+            )
+
         record = BenchmarkRecord.create(
             benchmark_type=self.benchmark_type,
             workflow_name=self._name,
@@ -209,7 +225,7 @@ class ComponentBenchmark(BenchmarkRunner):
             total_peak_rss=AggregatedMetrics.from_values(peak_rss_list),
             step_results=[step_result],
             raw_metrics=[],
-            tags=self._tags,
+            tags=merged_tags,
         )
 
         # Topology classification

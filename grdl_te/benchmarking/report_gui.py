@@ -30,7 +30,7 @@ Modified
 """
 
 # Standard library
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 # Third-party
 from nicegui import ui
@@ -172,17 +172,36 @@ _COMBINED_COLUMNS = [
 _DETAIL_COLUMNS = [c for c in _COMBINED_COLUMNS if c["field"] != "workflow"]
 
 
+_STATS_FIELDS = {"wall_median", "wall_stddev", "wall_p95"}
+
+
 def _columns_for(
     records: List[BenchmarkRecord],
     base_columns: List[Dict],
 ) -> List[Dict]:
     """Filter column definitions based on iteration count.
 
-    P95 is only meaningful when iterations > 10, so the column is
-    removed for lower iteration counts.
+    N=1:   Strip Median, StdDev, P95 and rename "Mean Wall" → "Wall Time".
+    N≤10:  Strip P95 only (statistically meaningless with few samples).
+    N>10:  All columns shown.
     """
+    all_single = all(r.iterations == 1 for r in records)
+
+    if all_single:
+        cols = []
+        for c in base_columns:
+            if c["field"] in _STATS_FIELDS:
+                continue
+            if c["field"] == "wall_mean":
+                c = {**c, "headerName": "Wall Time"}
+            elif c["field"] == "cpu_mean":
+                c = {**c, "headerName": "CPU Time"}
+            cols.append(c)
+        return cols
+
     if all(r.iterations > 10 for r in records):
         return base_columns
+
     return [c for c in base_columns if c["field"] != "wall_p95"]
 
 
@@ -206,20 +225,14 @@ def _exec_summary(records: List[BenchmarkRecord]) -> None:
             "text-lg font-semibold text-slate-200 mb-2"
         )
         with ui.row().classes("gap-8 flex-wrap items-end"):
-            # Topology counts
-            topo_counts: Dict[str, int] = {}
-            for rec in records:
-                name = (
-                    rec.topology.topology.value if rec.topology else "unknown"
-                )
-                topo_counts[name] = topo_counts.get(name, 0) + 1
-            topo_str = ", ".join(
-                f"{c} {n}" for n, c in sorted(topo_counts.items())
-            )
-            _render_metric("Topology", topo_str)
+            first = records[0]
+            hw = first.hardware
 
-            # Hardware one-liner
-            hw = records[0].hardware
+            _render_metric("Hostname", hw.hostname)
+
+            if hw.captured_at:
+                _render_metric("Captured", hw.captured_at[:19])
+
             mem_str = _fmt_bytes(hw.total_memory_bytes)
             gpu_part = (
                 f", {len(hw.gpu_devices)} GPU(s)"
@@ -228,26 +241,25 @@ def _exec_summary(records: List[BenchmarkRecord]) -> None:
             )
             _render_metric("Hardware", f"{hw.cpu_count} CPUs, {mem_str}{gpu_part}")
 
-            # Aggregate metrics
+            _render_metric("Records", str(len(records)))
+
+            # Per-record context
             if len(records) == 1:
                 r = records[0]
                 _render_metric("Iterations", str(r.iterations))
-            else:
-                import numpy as np
 
-                walls = [r.total_wall_time.mean for r in records]
-                cpus = [r.total_cpu_time.mean for r in records]
-                mems = [r.total_peak_rss.mean for r in records]
+                array_size = r.tags.get("array_size", "")
+                if array_size:
+                    _render_metric("Array Size", array_size)
+
                 _render_metric(
-                    "Avg Wall Time",
-                    _fmt_time(float(np.mean(walls))),
+                    "Wall Time",
+                    _fmt_time(r.total_wall_time.mean),
                     accent=True,
                 )
+                _render_metric("CPU Time", _fmt_time(r.total_cpu_time.mean))
                 _render_metric(
-                    "Avg CPU Time", _fmt_time(float(np.mean(cpus)))
-                )
-                _render_metric(
-                    "Avg Peak Memory", _fmt_bytes(float(np.mean(mems)))
+                    "Peak Memory", _fmt_bytes(r.total_peak_rss.mean)
                 )
 
 
@@ -289,12 +301,8 @@ def _time_decomposition(record: BenchmarkRecord) -> None:
             "value": _fmt_time(topo.critical_path_wall_time_s),
         },
         {
-            "metric": "Sum of Steps (if sequential)",
+            "metric": "Contended Step Sum ‡",
             "value": _fmt_time(topo.sum_of_steps_wall_time_s),
-        },
-        {
-            "metric": "Parallelism Ratio",
-            "value": f"{topo.parallelism_ratio:.2f}x",
         },
     ]
     columns = [

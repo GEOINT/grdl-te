@@ -35,8 +35,6 @@ from pathlib import Path
 from typing import Dict, List
 
 # Third-party
-import numpy as np
-
 # Internal
 from grdl_te.benchmarking.models import (
     AggregatedMetrics,
@@ -44,8 +42,6 @@ from grdl_te.benchmarking.models import (
     HardwareSnapshot,
     StepBenchmarkResult,
 )
-from grdl_te.benchmarking.comparison import compare_records
-
 LINE_WIDTH = 80
 RULE_CHAR = "="
 THIN_RULE_CHAR = "-"
@@ -175,8 +171,9 @@ def _format_configuration(records: List[BenchmarkRecord]) -> List[str]:
     # Collect unique benchmark types
     types = sorted({r.benchmark_type for r in records})
 
-    # Extract array size from tags
-    size_tag = first.tags.get("array_size", "unknown")
+    # Extract array size from tags (auto-populated by runners when a source
+    # is provided).
+    size_tag = first.tags.get("array_size", "")
     rows_tag = first.tags.get("rows", "?")
     cols_tag = first.tags.get("cols", "?")
 
@@ -190,12 +187,15 @@ def _format_configuration(records: List[BenchmarkRecord]) -> List[str]:
         f"  RUN CONFIGURATION",
         f"  {THIN_RULE_CHAR * 40}",
         f"  Iterations:      {first.iterations}",
-        f"  Array Size:      {size_tag} ({rows_tag} x {cols_tag})",
+    ]
+    if size_tag:
+        lines.append(f"  Array Size:      {size_tag} ({rows_tag} x {cols_tag})")
+    lines.extend([
         f"  Benchmark Types: {', '.join(types)}",
         f"  Total Records:   {len(records)}",
         f"  Time Span:       {time_start}",
         f"                   to {time_end}",
-    ]
+    ])
     return lines
 
 
@@ -493,8 +493,8 @@ def _format_branch_chains(record: BenchmarkRecord) -> List[str]:
 
     lines.extend([
         "",
-        f"{indent}Contended step-sum: {_fmt_time(contended_sum)}"
-        f"  ->  Parallel wall: {_fmt_time(actual_wall)}",
+        f"{indent}Contended Step Sum: {_fmt_time(contended_sum)}"
+        f"  ->  Parallel Wall: {_fmt_time(actual_wall)}",
         f"{indent}(Step times measured under resource contention."
         f" For true speedup, compare parallel wall time to a sequential benchmark.)",
     ])
@@ -818,10 +818,8 @@ def _format_overall_summary(records: List[BenchmarkRecord]) -> List[str]:
                 f"  |  {_fmt_bytes(m.min)} min  |  {_fmt_bytes(m.max)} max",
             ])
     else:
-        wall_means = np.array([r.total_wall_time.mean for r in records])
-        total_wall = float(np.sum(wall_means))
-        median_wall = float(np.median(wall_means))
-        mean_wall = float(np.mean(wall_means))
+        wall_means = [r.total_wall_time.mean for r in records]
+        total_wall = sum(wall_means)
 
         fastest = min(records, key=lambda r: r.total_wall_time.mean)
         slowest = max(records, key=lambda r: r.total_wall_time.mean)
@@ -831,15 +829,13 @@ def _format_overall_summary(records: List[BenchmarkRecord]) -> List[str]:
         lines.extend([
             f"  Total Benchmarks:   {len(records)}",
             f"  Total Wall Time:    {_fmt_time(total_wall)}",
-            f"  Mean Wall Time:     {_fmt_time(mean_wall)}",
-            f"  Median Wall Time:   {_fmt_time(median_wall)}",
             f"  Fastest:            {fastest.workflow_name} "
             f"({_fmt_time(fastest.total_wall_time.mean)})",
             f"  Slowest:            {slowest.workflow_name} "
             f"({_fmt_time(slowest.total_wall_time.mean)})",
-            f"  Least Peak Mem:     {least_mem.workflow_name} "
+            f"  Least Memory:       {least_mem.workflow_name} "
             f"({_fmt_bytes(least_mem.total_peak_rss.mean)})",
-            f"  Most Peak Mem:      {most_mem.workflow_name} "
+            f"  Most Memory:        {most_mem.workflow_name} "
             f"({_fmt_bytes(most_mem.total_peak_rss.mean)})",
         ])
 
