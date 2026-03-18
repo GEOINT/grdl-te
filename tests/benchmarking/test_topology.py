@@ -185,15 +185,15 @@ class TestClassifyTopology:
         topo = classify_topology(rec)
         assert topo.topology == WorkflowTopology.SEQUENTIAL
 
-    def test_parallelism_ratio(self):
-        """Parallelism ratio = sum_of_steps / wall_clock."""
+    def test_contended_step_sum(self):
+        """sum_of_steps_wall_time_s is the sum of contended step times."""
         steps = [
             _step(0, "A", wall=5.0, concurrent=True, step_id="a"),
             _step(1, "B", wall=5.0, concurrent=True, step_id="b"),
         ]
         rec = _record(steps, total_wall=5.0)
         topo = classify_topology(rec)
-        assert topo.parallelism_ratio == pytest.approx(2.0)
+        assert topo.sum_of_steps_wall_time_s == pytest.approx(10.0)
 
     def test_num_branches(self):
         """Branch count reflects number of root nodes."""

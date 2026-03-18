@@ -266,9 +266,10 @@ class TestParallelEndToEnd:
 
         md = format_report_md([rec])
         assert "Time Decomposition" in md
-        assert "Parallelism Ratio" in md
-        # Non-critical step should have asterisk annotation
-        assert "0.0%*" in md
+        assert "Contended Step Sum" in md
+        assert "Parallelism Ratio" not in md
+        # Non-critical step latency should show '--' (hidden by critical path)
+        assert "--" in md
 
     def test_comparison_two_workflows_no_topology(self):
         """Two records with no topology → compare → report with comparison."""

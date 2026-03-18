@@ -98,9 +98,7 @@ class TopologyDescriptor:
     critical_path_wall_time_s : float
         Sum of mean wall times along the critical path.
     sum_of_steps_wall_time_s : float
-        Sum of all step mean wall times (hypothetical sequential time).
-    parallelism_ratio : float
-        ``sum_of_steps / actual_wall_time``.  1.0 = purely sequential.
+        Sum of all step mean wall times measured under contention.
     """
 
     topology: WorkflowTopology
@@ -108,7 +106,6 @@ class TopologyDescriptor:
     critical_path_step_ids: tuple = ()
     critical_path_wall_time_s: float = 0.0
     sum_of_steps_wall_time_s: float = 0.0
-    parallelism_ratio: float = 1.0
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary.
@@ -123,7 +120,6 @@ class TopologyDescriptor:
             "critical_path_step_ids": list(self.critical_path_step_ids),
             "critical_path_wall_time_s": self.critical_path_wall_time_s,
             "sum_of_steps_wall_time_s": self.sum_of_steps_wall_time_s,
-            "parallelism_ratio": self.parallelism_ratio,
         }
 
     @classmethod
@@ -150,7 +146,6 @@ class TopologyDescriptor:
             sum_of_steps_wall_time_s=data.get(
                 "sum_of_steps_wall_time_s", 0.0
             ),
-            parallelism_ratio=data.get("parallelism_ratio", 1.0),
         )
 
 
