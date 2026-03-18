@@ -44,6 +44,7 @@ from grdl_te.benchmarking.models import (
     HardwareSnapshot,
     StepBenchmarkResult,
 )
+from grdl_te.benchmarking.comparison import compare_records
 
 LINE_WIDTH = 80
 RULE_CHAR = "="
@@ -225,6 +226,14 @@ def _format_metrics_table(
     -------
     List[str]
     """
+    # N=1: scalar layout (no statistics table)
+    if wall.count == 1:
+        return [
+            f"{indent}Wall (s):    {wall.mean:.4f}",
+            f"{indent}CPU  (s):    {cpu.mean:.4f}",
+            f"{indent}Mem  (KB):   {mem.mean / 1024:.1f}",
+        ]
+
     show_p95 = iterations > 10
 
     if show_p95:
@@ -303,6 +312,15 @@ def _format_metrics_table_partial(
     -------
     List[str]
     """
+    # N=1: scalar layout (no statistics table)
+    if wall.count == 1:
+        mem_str_single = _fmt_bytes(mem.mean)
+        return [
+            f"{indent}Wall (s):    {wall.mean:.4f}",
+            f"{indent}CPU  (s):    {cpu.mean:.4f}",
+            f"{indent}Mem:         {mem_str_single}  (concurrent — shared across parallel steps)",
+        ]
+
     show_p95 = iterations > 10
 
     if show_p95:
@@ -449,15 +467,12 @@ def _format_branch_chains(record: BenchmarkRecord) -> List[str]:
     chain_times = [sum(s.wall_time_s.mean for s in c) for c in chains]
     critical_time = max(chain_times)
 
-    active = [s for s in record.step_results if not _step_was_skipped(s)]
-    # Sum of step wall times measured *during* parallel execution.  Because
-    # steps competed for CPU/memory while co-running, each individual time is
-    # inflated relative to what that step would take in isolation.  The ratio
-    # below is NOT a true speedup — compare the parallel wall time against a
-    # dedicated sequential benchmark to get the real wall-clock gain.
-    contended_sum = sum(s.wall_time_s.mean for s in active)
     actual_wall = record.total_wall_time.mean
-    contended_ratio = contended_sum / actual_wall if actual_wall > 0 else 1.0
+    active = [s for s in record.step_results if not _step_was_skipped(s)]
+    # Step times are measured under parallel resource contention — each
+    # individual time is inflated relative to isolated standalone execution.
+    # The contended step sum is NOT a valid sequential baseline.
+    contended_sum = sum(s.wall_time_s.mean for s in active)
 
     indent = "     "
     lines = [
@@ -479,8 +494,7 @@ def _format_branch_chains(record: BenchmarkRecord) -> List[str]:
     lines.extend([
         "",
         f"{indent}Contended step-sum: {_fmt_time(contended_sum)}"
-        f"  ->  Parallel: {_fmt_time(actual_wall)}"
-        f"  |  Ratio: {contended_ratio:.2f}x",
+        f"  ->  Parallel wall: {_fmt_time(actual_wall)}",
         f"{indent}(Step times measured under resource contention."
         f" For true speedup, compare parallel wall time to a sequential benchmark.)",
     ])
@@ -578,9 +592,10 @@ def _format_step_detail(
     """
     indent = "       "
     gpu_tag = f"GPU: {'Yes' if step.gpu_used else 'No'}"
+    contended_tag = "  [contended]" if step.concurrent else ""
     lines = [
         f"       [{step.step_index}] {step.processor_name}"
-        f"  ({gpu_tag})",
+        f"  ({gpu_tag}){contended_tag}",
     ]
     if step.concurrent:
         # Concurrent steps: show wall/CPU per-step (accurate) but
@@ -600,27 +615,7 @@ def _format_step_detail(
                 iterations=iterations,
             )
         )
-    if step.gpu_memory_bytes is not None:
-        gm = step.gpu_memory_bytes
-        if iterations > 10:
-            lines.append(
-                f"{indent}GPU Mem (KB)  "
-                f"{gm.mean / 1024:>10.1f}  "
-                f"{gm.median / 1024:>10.1f}  "
-                f"{gm.stddev / 1024:>10.1f}  "
-                f"{gm.p95 / 1024:>10.1f}  "
-                f"{gm.min / 1024:>10.1f}  "
-                f"{gm.max / 1024:>10.1f}"
-            )
-        else:
-            lines.append(
-                f"{indent}GPU Mem (KB)  "
-                f"{gm.mean / 1024:>10.1f}  "
-                f"{gm.median / 1024:>10.1f}  "
-                f"{gm.stddev / 1024:>10.1f}  "
-                f"{gm.min / 1024:>10.1f}  "
-                f"{gm.max / 1024:>10.1f}"
-            )
+    # GPU memory row omitted — field not reliably tracked at runtime.
     return lines
 
 
@@ -667,14 +662,18 @@ def _format_record_detail(
         parallel = [s for s in ran if s.concurrent]
 
         lines.append("")
-        summary_parts = [f"{len(ran)} ran"]
-        if parallel:
-            summary_parts.append(f"{len(parallel)} parallel")
-        summary_parts.append(f"{len(skipped)} skipped")
-        lines.append(
-            f"     Steps ({', '.join(summary_parts)}"
-            f" / {len(record.step_results)} total):"
-        )
+        if skipped or parallel:
+            summary_parts = [f"{len(ran)} ran"]
+            if parallel:
+                summary_parts.append(f"{len(parallel)} parallel")
+            if skipped:
+                summary_parts.append(f"{len(skipped)} skipped")
+            lines.append(
+                f"     Steps ({', '.join(summary_parts)}"
+                f" / {len(record.step_results)} total):"
+            )
+        else:
+            lines.append(f"     Steps:")
         for step in record.step_results:
             if _step_was_skipped(step):
                 lines.append(
@@ -714,8 +713,8 @@ def _format_detailed_results(
     return lines
 
 
-def _format_module_summary(records: List[BenchmarkRecord]) -> List[str]:
-    """Build the module-level aggregation section.
+def _format_comparison(records: List[BenchmarkRecord]) -> List[str]:
+    """Build the workflow comparison section for multi-record reports.
 
     Parameters
     ----------
@@ -726,38 +725,44 @@ def _format_module_summary(records: List[BenchmarkRecord]) -> List[str]:
     -------
     List[str]
     """
-    module_data: Dict[str, List[float]] = {}
-    for record in records:
-        mod = record.tags.get("module", "unknown")
-        module_data.setdefault(mod, []).append(record.total_wall_time.mean)
-
-    if len(module_data) <= 1:
-        return []
+    col_name = 34
+    col_topo = 12
+    col_time = 10
+    col_mem = 12
 
     lines = [
         "",
         RULE_CHAR * LINE_WIDTH,
-        f"  MODULE SUMMARY",
+        f"  WORKFLOW COMPARISON",
         RULE_CHAR * LINE_WIDTH,
         "",
-        f"  {'Module':<40s}  {'Count':>6s}  "
-        f"{'Total Wall (s)':>14s}  {'Avg Wall (s)':>12s}",
-        f"  {THIN_RULE_CHAR * 40}  {THIN_RULE_CHAR * 6}  "
-        f"{THIN_RULE_CHAR * 14}  {THIN_RULE_CHAR * 12}",
+        f"  {'Workflow':<{col_name}}  {'Topology':<{col_topo}}  "
+        f"{'Wall Time':>{col_time}}  {'CPU Time':>{col_time}}  "
+        f"{'Peak Memory':>{col_mem}}  Steps",
+        f"  {THIN_RULE_CHAR * col_name}  {THIN_RULE_CHAR * col_topo}  "
+        f"{THIN_RULE_CHAR * col_time}  {THIN_RULE_CHAR * col_time}  "
+        f"{THIN_RULE_CHAR * col_mem}  {THIN_RULE_CHAR * 5}",
     ]
 
-    sorted_modules = sorted(
-        module_data.items(),
-        key=lambda item: sum(item[1]),
+    sorted_records = sorted(
+        records,
+        key=lambda r: r.total_wall_time.mean,
         reverse=True,
     )
 
-    for mod, times in sorted_modules:
-        total = sum(times)
-        avg = total / len(times)
+    for rec in sorted_records:
+        topo = rec.topology.topology.value if rec.topology else "unknown"
+        active_count = sum(
+            1 for s in rec.step_results if not _step_was_skipped(s)
+        )
+        name = rec.workflow_name
+        if len(name) > col_name:
+            name = name[:col_name - 3] + "..."
         lines.append(
-            f"  {mod:<40s}  {len(times):>6d}  "
-            f"{total:>14.4f}  {avg:>12.4f}"
+            f"  {name:<{col_name}}  {topo:<{col_topo}}  "
+            f"{_fmt_time(rec.total_wall_time.mean):>{col_time}}  "
+            f"{_fmt_time(rec.total_cpu_time.mean):>{col_time}}  "
+            f"{_fmt_bytes(rec.total_peak_rss.mean):>{col_mem}}  {active_count}"
         )
 
     return lines
@@ -792,18 +797,26 @@ def _format_overall_summary(records: List[BenchmarkRecord]) -> List[str]:
         w = r.total_wall_time
         c = r.total_cpu_time
         m = r.total_peak_rss
-        lines.extend([
-            f"  Workflow:           {r.workflow_name} v{r.workflow_version}",
-            f"  Iterations:         {r.iterations}",
-            f"  Wall Time:          {_fmt_time(w.mean)} mean"
-            f"  |  {_fmt_time(w.min)} min  |  {_fmt_time(w.max)} max"
-            f"  |  {_fmt_time(w.stddev)} stddev",
-            f"  CPU Time:           {_fmt_time(c.mean)} mean"
-            f"  |  {_fmt_time(c.min)} min  |  {_fmt_time(c.max)} max"
-            f"  |  {_fmt_time(c.stddev)} stddev",
-            f"  Peak Memory:        {_fmt_bytes(m.mean)} mean"
-            f"  |  {_fmt_bytes(m.min)} min  |  {_fmt_bytes(m.max)} max",
-        ])
+        if r.iterations == 1:
+            lines.extend([
+                f"  Workflow:           {r.workflow_name} v{r.workflow_version}",
+                f"  Wall Time:          {_fmt_time(w.mean)}",
+                f"  CPU Time:           {_fmt_time(c.mean)}",
+                f"  Peak Memory:        {_fmt_bytes(m.mean)}",
+            ])
+        else:
+            lines.extend([
+                f"  Workflow:           {r.workflow_name} v{r.workflow_version}",
+                f"  Iterations:         {r.iterations}",
+                f"  Wall Time:          {_fmt_time(w.mean)} mean"
+                f"  |  {_fmt_time(w.min)} min  |  {_fmt_time(w.max)} max"
+                f"  |  {_fmt_time(w.stddev)} stddev",
+                f"  CPU Time:           {_fmt_time(c.mean)} mean"
+                f"  |  {_fmt_time(c.min)} min  |  {_fmt_time(c.max)} max"
+                f"  |  {_fmt_time(c.stddev)} stddev",
+                f"  Peak Memory:        {_fmt_bytes(m.mean)} mean"
+                f"  |  {_fmt_bytes(m.min)} min  |  {_fmt_bytes(m.max)} max",
+            ])
     else:
         wall_means = np.array([r.total_wall_time.mean for r in records])
         total_wall = float(np.sum(wall_means))
@@ -846,7 +859,7 @@ def format_report(records: List[BenchmarkRecord]) -> str:
 
     Produces a human-readable text report covering hardware configuration,
     run parameters, per-benchmark statistical breakdowns, per-step details,
-    module-level aggregation, and an overall summary.
+    workflow comparison (for multi-record runs), and an overall summary.
 
     Parameters
     ----------
@@ -869,7 +882,10 @@ def format_report(records: List[BenchmarkRecord]) -> str:
     lines: List[str] = []
 
     lines.extend(_format_header(len(records)))
-    lines.extend(_format_hardware(records[0].hardware))
+    if records[0].hardware is not None:
+        lines.extend(_format_hardware(records[0].hardware))
+    else:
+        lines.append("Hardware:        [information missing — traces predate hardware capture]")
     lines.extend(_format_configuration(records))
 
     # Sort by wall time descending (slowest first)
@@ -880,8 +896,8 @@ def format_report(records: List[BenchmarkRecord]) -> str:
     )
 
     lines.extend(_format_detailed_results(sorted_records))
-    lines.extend(_format_module_summary(records))
     if len(records) > 1:
+        lines.extend(_format_comparison(records))
         lines.extend(_format_overall_summary(records))
 
     return "\n".join(lines)

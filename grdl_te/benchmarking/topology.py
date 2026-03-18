@@ -211,8 +211,7 @@ def classify_topology(record: BenchmarkRecord) -> TopologyDescriptor:
     3. All non-skipped steps have ``concurrent=True`` → ``PARALLEL``
     4. Mix of concurrent and non-concurrent → ``MIXED``
 
-    Also computes critical path, sum-of-steps, parallelism ratio,
-    and branch count.
+    Also computes critical path, contended step sum, and branch count.
 
     Parameters
     ----------
@@ -263,8 +262,6 @@ def classify_topology(record: BenchmarkRecord) -> TopologyDescriptor:
     # Compute critical path and metrics
     cp_ids, cp_time = compute_critical_path(active)
     sum_of_steps = sum(s.wall_time_s.mean for s in active)
-    wall_clock = record.total_wall_time.mean
-    ratio = sum_of_steps / wall_clock if wall_clock > 0 else 1.0
     num_branches = _count_branches(active)
 
     return TopologyDescriptor(
@@ -273,7 +270,6 @@ def classify_topology(record: BenchmarkRecord) -> TopologyDescriptor:
         critical_path_step_ids=tuple(cp_ids),
         critical_path_wall_time_s=cp_time,
         sum_of_steps_wall_time_s=sum_of_steps,
-        parallelism_ratio=ratio,
     )
 
 

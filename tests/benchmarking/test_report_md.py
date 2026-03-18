@@ -185,16 +185,18 @@ class TestFormatReportMd:
             critical_path_step_ids=("crit",),
             critical_path_wall_time_s=5.0,
             sum_of_steps_wall_time_s=7.0,
-            parallelism_ratio=1.4,
         )
         rec = _record("ParallelWF", steps, topology=topo, total_wall=5.0)
         md = format_report_md([rec])
 
         assert "Time Decomposition" in md
-        assert "Parallelism Ratio" in md
+        assert "Contended Step Sum" in md
+        assert "Parallelism Ratio" not in md
         assert "critical" in md
-        # Non-critical step latency should have asterisk
-        assert "0.0%*" in md
+        # Non-critical step latency should show '--' (hidden by critical path)
+        assert "--" in md
+        # Concurrent wall times have contention marker
+        assert "‡" in md
         # Memory has dagger
         assert "†" in md
 
@@ -375,7 +377,6 @@ class TestFormatReportMd:
             critical_path_wall_time_s=3.0,
             sum_of_steps_wall_time_s=5.0,
             num_branches=2,
-            parallelism_ratio=1.67,
         )
         rec = _record("ConcurrentWF", steps, topology=topo, total_wall=3.0)
         md = format_report_md([rec])

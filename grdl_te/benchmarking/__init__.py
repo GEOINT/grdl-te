@@ -4,7 +4,8 @@ Benchmarking subpackage — performance evaluation infrastructure.
 
 Provides data models for benchmark results, abstract base classes for
 runners and stores, and concrete implementations for active workflow
-benchmarking, component-level profiling, and JSON file persistence.
+benchmarking, passive forensic benchmarking from pre-recorded traces,
+component-level profiling, and JSON file persistence.
 
 Author
 ------
@@ -21,7 +22,7 @@ Created
 
 Modified
 --------
-2026-02-18
+2026-03-17
 """
 
 from grdl_te.benchmarking.models import (
@@ -49,6 +50,7 @@ from grdl_te.benchmarking.comparison import (
     compare_records,
 )
 from grdl_te.benchmarking.suite import run_suite
+from grdl_te.benchmarking.forensic import ForensicExecutionTrace, ForensicTraceReader
 
 __all__ = [
     "ARRAY_SIZES",
@@ -60,10 +62,12 @@ __all__ = [
     "BenchmarkStore",
     "ComparisonResult",
     "ComponentBenchmark",
+    "ForensicExecutionTrace",
+    "ForensicTraceReader",
     "HardwareSnapshot",
     "JSONBenchmarkStore",
+    "PassiveBenchmarkRunner",
     "StepBenchmarkResult",
-
     "TopologyDescriptor",
     "WorkflowTopology",
     "as_pytest_benchmark",
@@ -83,11 +87,14 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    """Lazy import for ActiveBenchmarkRunner (requires grdl-runtime)."""
+    """Lazy import for runners that require grdl-runtime."""
     if name == "ActiveBenchmarkRunner":
         from grdl_te.benchmarking.active import ActiveBenchmarkRunner
         return ActiveBenchmarkRunner
     if name == "launch_ui":
         from grdl_te.benchmarking.report_gui import launch_ui
         return launch_ui
+    if name == "PassiveBenchmarkRunner":
+        from grdl_te.benchmarking.passive import PassiveBenchmarkRunner
+        return PassiveBenchmarkRunner
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

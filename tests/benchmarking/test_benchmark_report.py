@@ -170,21 +170,19 @@ class TestFormatReport:
         report = format_report([_make_record()])
         assert "DETAILED RESULTS" in report
 
-    def test_contains_module_summary(self):
-        """Report includes module aggregation section when multiple modules exist."""
-        r1 = _make_record(tags={"module": "mod_a", "array_size": "small",
-                                "rows": "512", "cols": "512"})
-        r2 = _make_record(tags={"module": "mod_b", "array_size": "small",
-                                "rows": "512", "cols": "512"})
+    def test_contains_comparison(self):
+        """Report includes workflow comparison section for multiple records."""
+        r1 = _make_record(workflow_name="WorkflowAlpha")
+        r2 = _make_record(workflow_name="WorkflowBeta")
         report = format_report([r1, r2])
-        assert "MODULE SUMMARY" in report
-        assert "mod_a" in report
-        assert "mod_b" in report
+        assert "WORKFLOW COMPARISON" in report
+        assert "WorkflowAlpha" in report
+        assert "WorkflowBeta" in report
 
-    def test_no_module_summary_single_module(self):
-        """Report omits module aggregation section with only one module."""
+    def test_no_comparison_single_record(self):
+        """Report omits comparison section for a single record."""
         report = format_report([_make_record()])
-        assert "MODULE SUMMARY" not in report
+        assert "WORKFLOW COMPARISON" not in report
 
     def test_contains_overall_summary_multi(self):
         """Report includes overall summary with fastest/slowest for multi-record."""
@@ -216,7 +214,8 @@ class TestFormatReport:
         step = _make_step(processor_name="MyFilter")
         record = _make_record(step_results=[step])
         report = format_report([record])
-        assert "1 ran, 0 skipped / 1 total" in report
+        # No summary line when nothing is skipped and no parallel steps
+        assert "1 ran, 0 skipped / 1 total" not in report
         assert "MyFilter" in report
 
     def test_skipped_steps_shown_inline(self):
@@ -239,7 +238,7 @@ class TestFormatReport:
         assert "SKIPPED (condition not met)" in report
 
     def test_records_with_gpu_memory(self):
-        """GPU memory statistics appear when present in steps."""
+        """GPU flag appears in step header when gpu_used=True."""
         gpu_mem = AggregatedMetrics.from_values(
             [1000000.0, 1100000.0, 1050000.0]
         )
@@ -247,7 +246,8 @@ class TestFormatReport:
         record = _make_record(step_results=[step])
         report = format_report([record])
         assert "GPU: Yes" in report
-        assert "GPU Mem" in report
+        # GPU memory row is not rendered (field not reliably tracked at runtime)
+        assert "GPU Mem" not in report
 
     def test_gpu_not_shown_when_absent(self):
         """GPU memory row absent when step has no GPU memory."""
