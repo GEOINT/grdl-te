@@ -115,36 +115,6 @@ def _md_executive_summary(
     """Build the executive summary with bottleneck identification."""
     lines = ["## Executive Summary\n"]
 
-    first = records[0]
-    hw = first.hardware
-
-    # Context table — quick-glance metadata
-    lines.append("| | |")
-    lines.append("|---|---|")
-    lines.append(f"| **Hostname** | {hw.hostname} |")
-
-    captured = hw.captured_at
-    if captured:
-        lines.append(f"| **Captured** | {captured} |")
-
-    lines.append(f"| **Hardware** | {hw.cpu_count} CPUs, "
-                 f"{_fmt_bytes(hw.total_memory_bytes)} RAM"
-                 f"{f', {len(hw.gpu_devices)} GPU(s)' if hw.gpu_available else ''} |")
-
-    lines.append(f"| **Records** | {len(records)} |")
-    lines.append(f"| **Iterations** | {first.iterations} |")
-
-    array_size = _resolve_array_size(first)
-    if array_size:
-        lines.append(f"| **Array Size** | {array_size} |")
-
-    if len(records) == 1:
-        lines.append(f"| **Wall Time** | {_fmt_time(first.total_wall_time.mean)} |")
-        lines.append(f"| **CPU Time** | {_fmt_time(first.total_cpu_time.mean)} |")
-        lines.append(f"| **Peak Memory** | {_fmt_bytes(first.total_peak_rss.mean)} |")
-
-    lines.append("")
-
     # Bottleneck table
     if comparison and comparison.bottlenecks:
         bns = comparison.bottlenecks[:5]
