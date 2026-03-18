@@ -35,8 +35,6 @@ from pathlib import Path
 from typing import Dict, List
 
 # Third-party
-import numpy as np
-
 # Internal
 from grdl_te.benchmarking.models import (
     AggregatedMetrics,
@@ -44,8 +42,6 @@ from grdl_te.benchmarking.models import (
     HardwareSnapshot,
     StepBenchmarkResult,
 )
-from grdl_te.benchmarking.comparison import compare_records
-
 LINE_WIDTH = 80
 RULE_CHAR = "="
 THIN_RULE_CHAR = "-"
@@ -175,8 +171,9 @@ def _format_configuration(records: List[BenchmarkRecord]) -> List[str]:
     # Collect unique benchmark types
     types = sorted({r.benchmark_type for r in records})
 
-    # Extract array size from tags
-    size_tag = first.tags.get("array_size", "unknown")
+    # Extract array size from tags (auto-populated by runners when a source
+    # is provided).
+    size_tag = first.tags.get("array_size", "")
     rows_tag = first.tags.get("rows", "?")
     cols_tag = first.tags.get("cols", "?")
 
@@ -190,12 +187,15 @@ def _format_configuration(records: List[BenchmarkRecord]) -> List[str]:
         f"  RUN CONFIGURATION",
         f"  {THIN_RULE_CHAR * 40}",
         f"  Iterations:      {first.iterations}",
-        f"  Array Size:      {size_tag} ({rows_tag} x {cols_tag})",
+    ]
+    if size_tag:
+        lines.append(f"  Array Size:      {size_tag} ({rows_tag} x {cols_tag})")
+    lines.extend([
         f"  Benchmark Types: {', '.join(types)}",
         f"  Total Records:   {len(records)}",
         f"  Time Span:       {time_start}",
         f"                   to {time_end}",
-    ]
+    ])
     return lines
 
 
@@ -204,6 +204,7 @@ def _format_metrics_table(
     cpu: AggregatedMetrics,
     mem: AggregatedMetrics,
     indent: str = "     ",
+    iterations: int = 1,
 ) -> List[str]:
     """Build an aligned statistics table for wall/cpu/memory metrics.
 
@@ -217,11 +218,15 @@ def _format_metrics_table(
         Memory statistics in bytes.
     indent : str
         Whitespace prefix for each line.
+    iterations : int
+        Number of benchmark iterations.  P95 column is only shown
+        when *iterations* > 10.
 
     Returns
     -------
     List[str]
     """
+    # N=1: scalar layout (no statistics table)
     if wall.count == 1:
         return [
             f"{indent}Wall (s):    {wall.mean:.4f}",
@@ -229,22 +234,43 @@ def _format_metrics_table(
             f"{indent}Mem  (KB):   {mem.mean / 1024:.1f}",
         ]
 
-    hdr = (
-        f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
-        f"{'StdDev':>10s}  {'Min':>10s}  {'Max':>10s}"
-    )
-    sep = f"{indent}{THIN_RULE_CHAR * 66}"
+    show_p95 = iterations > 10
 
-    def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
-             fmt: str = ".4f") -> str:
-        return (
-            f"{indent}{label:<12s}  "
-            f"{m.mean / divisor:>10{fmt}}  "
-            f"{m.median / divisor:>10{fmt}}  "
-            f"{m.stddev / divisor:>10{fmt}}  "
-            f"{m.min / divisor:>10{fmt}}  "
-            f"{m.max / divisor:>10{fmt}}"
+    if show_p95:
+        hdr = (
+            f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
+            f"{'StdDev':>10s}  {'P95':>10s}  {'Min':>10s}  {'Max':>10s}"
         )
+        sep = f"{indent}{THIN_RULE_CHAR * 78}"
+
+        def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
+                 fmt: str = ".4f") -> str:
+            return (
+                f"{indent}{label:<12s}  "
+                f"{m.mean / divisor:>10{fmt}}  "
+                f"{m.median / divisor:>10{fmt}}  "
+                f"{m.stddev / divisor:>10{fmt}}  "
+                f"{m.p95 / divisor:>10{fmt}}  "
+                f"{m.min / divisor:>10{fmt}}  "
+                f"{m.max / divisor:>10{fmt}}"
+            )
+    else:
+        hdr = (
+            f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
+            f"{'StdDev':>10s}  {'Min':>10s}  {'Max':>10s}"
+        )
+        sep = f"{indent}{THIN_RULE_CHAR * 66}"
+
+        def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
+                 fmt: str = ".4f") -> str:
+            return (
+                f"{indent}{label:<12s}  "
+                f"{m.mean / divisor:>10{fmt}}  "
+                f"{m.median / divisor:>10{fmt}}  "
+                f"{m.stddev / divisor:>10{fmt}}  "
+                f"{m.min / divisor:>10{fmt}}  "
+                f"{m.max / divisor:>10{fmt}}"
+            )
 
     return [
         hdr,
@@ -260,6 +286,7 @@ def _format_metrics_table_partial(
     cpu: AggregatedMetrics,
     mem: AggregatedMetrics,
     indent: str = "     ",
+    iterations: int = 1,
 ) -> List[str]:
     """Build a statistics table for a concurrent step.
 
@@ -277,11 +304,15 @@ def _format_metrics_table_partial(
         Level-wide peak memory (shared across concurrent steps).
     indent : str
         Whitespace prefix for each line.
+    iterations : int
+        Number of benchmark iterations.  P95 column is only shown
+        when *iterations* > 10.
 
     Returns
     -------
     List[str]
     """
+    # N=1: scalar layout (no statistics table)
     if wall.count == 1:
         mem_str_single = _fmt_bytes(mem.mean)
         return [
@@ -290,22 +321,43 @@ def _format_metrics_table_partial(
             f"{indent}Mem:         {mem_str_single}  (concurrent — shared across parallel steps)",
         ]
 
-    hdr = (
-        f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
-        f"{'StdDev':>10s}  {'Min':>10s}  {'Max':>10s}"
-    )
-    sep = f"{indent}{THIN_RULE_CHAR * 66}"
+    show_p95 = iterations > 10
 
-    def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
-             fmt: str = ".4f") -> str:
-        return (
-            f"{indent}{label:<12s}  "
-            f"{m.mean / divisor:>10{fmt}}  "
-            f"{m.median / divisor:>10{fmt}}  "
-            f"{m.stddev / divisor:>10{fmt}}  "
-            f"{m.min / divisor:>10{fmt}}  "
-            f"{m.max / divisor:>10{fmt}}"
+    if show_p95:
+        hdr = (
+            f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
+            f"{'StdDev':>10s}  {'P95':>10s}  {'Min':>10s}  {'Max':>10s}"
         )
+        sep = f"{indent}{THIN_RULE_CHAR * 78}"
+
+        def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
+                 fmt: str = ".4f") -> str:
+            return (
+                f"{indent}{label:<12s}  "
+                f"{m.mean / divisor:>10{fmt}}  "
+                f"{m.median / divisor:>10{fmt}}  "
+                f"{m.stddev / divisor:>10{fmt}}  "
+                f"{m.p95 / divisor:>10{fmt}}  "
+                f"{m.min / divisor:>10{fmt}}  "
+                f"{m.max / divisor:>10{fmt}}"
+            )
+    else:
+        hdr = (
+            f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
+            f"{'StdDev':>10s}  {'Min':>10s}  {'Max':>10s}"
+        )
+        sep = f"{indent}{THIN_RULE_CHAR * 66}"
+
+        def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
+                 fmt: str = ".4f") -> str:
+            return (
+                f"{indent}{label:<12s}  "
+                f"{m.mean / divisor:>10{fmt}}  "
+                f"{m.median / divisor:>10{fmt}}  "
+                f"{m.stddev / divisor:>10{fmt}}  "
+                f"{m.min / divisor:>10{fmt}}  "
+                f"{m.max / divisor:>10{fmt}}"
+            )
 
     mem_kb = mem.mean / 1024.0
     if mem_kb >= 1024 * 1024:
@@ -441,8 +493,8 @@ def _format_branch_chains(record: BenchmarkRecord) -> List[str]:
 
     lines.extend([
         "",
-        f"{indent}Contended step-sum: {_fmt_time(contended_sum)}"
-        f"  ->  Parallel wall: {_fmt_time(actual_wall)}",
+        f"{indent}Contended Step Sum: {_fmt_time(contended_sum)}"
+        f"  ->  Parallel Wall: {_fmt_time(actual_wall)}",
         f"{indent}(Step times measured under resource contention."
         f" For true speedup, compare parallel wall time to a sequential benchmark.)",
     ])
@@ -521,13 +573,18 @@ def _format_step_memory_table(record: BenchmarkRecord) -> List[str]:
     return lines
 
 
-def _format_step_detail(step: StepBenchmarkResult) -> List[str]:
+def _format_step_detail(
+    step: StepBenchmarkResult,
+    iterations: int = 1,
+) -> List[str]:
     """Build the detail block for a single workflow step.
 
     Parameters
     ----------
     step : StepBenchmarkResult
         Per-step aggregated metrics.
+    iterations : int
+        Number of benchmark iterations (forwarded for P95 visibility).
 
     Returns
     -------
@@ -547,6 +604,7 @@ def _format_step_detail(step: StepBenchmarkResult) -> List[str]:
             _format_metrics_table_partial(
                 step.wall_time_s, step.cpu_time_s, step.peak_rss_bytes,
                 indent=indent,
+                iterations=iterations,
             )
         )
     else:
@@ -554,8 +612,10 @@ def _format_step_detail(step: StepBenchmarkResult) -> List[str]:
             _format_metrics_table(
                 step.wall_time_s, step.cpu_time_s, step.peak_rss_bytes,
                 indent=indent,
+                iterations=iterations,
             )
         )
+    # GPU memory row omitted — field not reliably tracked at runtime.
     return lines
 
 
@@ -582,6 +642,9 @@ def _format_record_detail(
         f"     Type: {record.benchmark_type}    "
         f"Version: {record.workflow_version}    "
         f"Iterations: {record.iterations}",
+        f"     Wall: {_fmt_time(record.total_wall_time.mean)}    "
+        f"CPU: {_fmt_time(record.total_cpu_time.mean)}    "
+        f"Memory: {_fmt_bytes(record.total_peak_rss.mean)}",
     ]
 
     if record.tags:
@@ -589,14 +652,6 @@ def _format_record_detail(
         lines.append(f"     Tags: {tag_str}")
 
     lines.append(f"     {THIN_RULE_CHAR * 72}")
-
-    lines.extend(
-        _format_metrics_table(
-            record.total_wall_time,
-            record.total_cpu_time,
-            record.total_peak_rss,
-        )
-    )
 
     lines.extend(_format_branch_chains(record))
     lines.extend(_format_step_memory_table(record))
@@ -626,7 +681,7 @@ def _format_record_detail(
                     f"  -- SKIPPED (condition not met)"
                 )
             else:
-                lines.extend(_format_step_detail(step))
+                lines.extend(_format_step_detail(step, iterations=record.iterations))
 
     return lines
 
@@ -763,10 +818,8 @@ def _format_overall_summary(records: List[BenchmarkRecord]) -> List[str]:
                 f"  |  {_fmt_bytes(m.min)} min  |  {_fmt_bytes(m.max)} max",
             ])
     else:
-        wall_means = np.array([r.total_wall_time.mean for r in records])
-        total_wall = float(np.sum(wall_means))
-        median_wall = float(np.median(wall_means))
-        mean_wall = float(np.mean(wall_means))
+        wall_means = [r.total_wall_time.mean for r in records]
+        total_wall = sum(wall_means)
 
         fastest = min(records, key=lambda r: r.total_wall_time.mean)
         slowest = max(records, key=lambda r: r.total_wall_time.mean)
@@ -776,15 +829,13 @@ def _format_overall_summary(records: List[BenchmarkRecord]) -> List[str]:
         lines.extend([
             f"  Total Benchmarks:   {len(records)}",
             f"  Total Wall Time:    {_fmt_time(total_wall)}",
-            f"  Mean Wall Time:     {_fmt_time(mean_wall)}",
-            f"  Median Wall Time:   {_fmt_time(median_wall)}",
             f"  Fastest:            {fastest.workflow_name} "
             f"({_fmt_time(fastest.total_wall_time.mean)})",
             f"  Slowest:            {slowest.workflow_name} "
             f"({_fmt_time(slowest.total_wall_time.mean)})",
-            f"  Least Peak Mem:     {least_mem.workflow_name} "
+            f"  Least Memory:       {least_mem.workflow_name} "
             f"({_fmt_bytes(least_mem.total_peak_rss.mean)})",
-            f"  Most Peak Mem:      {most_mem.workflow_name} "
+            f"  Most Memory:        {most_mem.workflow_name} "
             f"({_fmt_bytes(most_mem.total_peak_rss.mean)})",
         ])
 
@@ -843,7 +894,7 @@ def format_report(records: List[BenchmarkRecord]) -> str:
     lines.extend(_format_detailed_results(sorted_records))
     if len(records) > 1:
         lines.extend(_format_comparison(records))
-    lines.extend(_format_overall_summary(records))
+        lines.extend(_format_overall_summary(records))
 
     return "\n".join(lines)
 

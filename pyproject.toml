@@ -23,6 +23,9 @@ dependencies = [
 benchmarking = [
     "grdl-runtime",
 ]
+gui = [
+    "nicegui>=1.4",
+]
 dev = [
     "pytest-benchmark>=4.0",
     "pytest-xdist>=3.0",  # parallel test execution

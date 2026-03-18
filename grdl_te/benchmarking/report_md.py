@@ -98,6 +98,16 @@ def _md_header(record_count: int) -> str:
     )
 
 
+def _resolve_array_size(record: BenchmarkRecord) -> str:
+    """Derive a human-readable array size from record tags.
+
+    Both ``ActiveBenchmarkRunner`` and ``ComponentBenchmark`` auto-populate
+    ``array_size``, ``rows``, and ``cols`` tags from the ``BenchmarkSource``
+    when one is provided.  This function reads those tags.
+    """
+    return record.tags.get("array_size", "")
+
+
 def _md_executive_summary(
     records: List[BenchmarkRecord],
     comparison: Optional[ComparisonResult],
@@ -105,25 +115,35 @@ def _md_executive_summary(
     """Build the executive summary with bottleneck identification."""
     lines = ["## Executive Summary\n"]
 
-    # Topology summary
-    topo_counts: Dict[str, int] = {}
-    for rec in records:
-        if rec.topology:
-            name = rec.topology.topology.value
-        else:
-            name = "unknown"
-        topo_counts[name] = topo_counts.get(name, 0) + 1
+    first = records[0]
+    hw = first.hardware
 
-    topo_parts = []
-    for topo_name, count in sorted(topo_counts.items()):
-        topo_parts.append(f"{count} {topo_name}")
-    lines.append(f"**Topology**: {', '.join(topo_parts)}\n")
+    # Context table — quick-glance metadata
+    lines.append("| | |")
+    lines.append("|---|---|")
+    lines.append(f"| **Hostname** | {hw.hostname} |")
 
-    # Hardware one-liner
-    hw = records[0].hardware
-    mem_str = _fmt_bytes(hw.total_memory_bytes)
-    gpu_str = f", {len(hw.gpu_devices)} GPU(s)" if hw.gpu_available else ""
-    lines.append(f"**Hardware**: {hw.cpu_count} CPUs, {mem_str} RAM{gpu_str}\n")
+    captured = hw.captured_at
+    if captured:
+        lines.append(f"| **Captured** | {captured} |")
+
+    lines.append(f"| **Hardware** | {hw.cpu_count} CPUs, "
+                 f"{_fmt_bytes(hw.total_memory_bytes)} RAM"
+                 f"{f', {len(hw.gpu_devices)} GPU(s)' if hw.gpu_available else ''} |")
+
+    lines.append(f"| **Records** | {len(records)} |")
+    lines.append(f"| **Iterations** | {first.iterations} |")
+
+    array_size = _resolve_array_size(first)
+    if array_size:
+        lines.append(f"| **Array Size** | {array_size} |")
+
+    if len(records) == 1:
+        lines.append(f"| **Wall Time** | {_fmt_time(first.total_wall_time.mean)} |")
+        lines.append(f"| **CPU Time** | {_fmt_time(first.total_cpu_time.mean)} |")
+        lines.append(f"| **Peak Memory** | {_fmt_bytes(first.total_peak_rss.mean)} |")
+
+    lines.append("")
 
     # Bottleneck table
     if comparison and comparison.bottlenecks:
@@ -194,13 +214,14 @@ def _md_hardware(hardware: HardwareSnapshot) -> str:
 def _md_configuration(records: List[BenchmarkRecord]) -> str:
     """Build the run configuration section."""
     first = records[0]
-    size_tag = first.tags.get("array_size", "unknown")
+    array_size = _resolve_array_size(first)
 
-    lines = [
-        f"**Iterations**: {first.iterations} | "
-        f"**Array Size**: {size_tag} | "
-        f"**Records**: {len(records)}\n",
-    ]
+    parts = [f"**Iterations**: {first.iterations}"]
+    if array_size:
+        parts.append(f"**Array Size**: {array_size}")
+    parts.append(f"**Records**: {len(records)}")
+
+    lines = [" | ".join(parts) + "\n"]
     return "\n".join(lines)
 
 
@@ -231,10 +252,21 @@ def _md_step_table(record: BenchmarkRecord) -> str:
         cp_set = set(record.topology.critical_path_step_ids)
 
     is_single_run = record.iterations == 1
+    show_p95 = record.iterations > 10
 
+    # Table header — layout depends on N=1 (scalar) vs N>1 (statistics)
     if is_single_run:
         lines.append("| # | Step | Wall Time | Latency% | Memory% | Path |")
         lines.append("|---|------|-----------|----------|---------|------|")
+    elif show_p95:
+        lines.append(
+            "| # | Step | Mean | Median | StdDev | P95 | Min | Max | "
+            "Latency% | Memory% | Path |"
+        )
+        lines.append(
+            "|---|------|------|--------|--------|-----|-----|-----|"
+            "----------|---------|------|"
+        )
     else:
         lines.append(
             "| # | Step | Mean | Median | StdDev | Min | Max | "
@@ -248,15 +280,15 @@ def _md_step_table(record: BenchmarkRecord) -> str:
     for step in record.step_results:
         if _step_was_skipped(step):
             if is_single_run:
-                lines.append(
-                    f"| {step.step_index} | `{_short_name(step.processor_name)}` "
-                    f"| -- | -- | -- | *skipped* |"
-                )
+                skip_dashes = "-- | -- | --"
+            elif show_p95:
+                skip_dashes = "-- | -- | -- | -- | -- | -- | -- | --"
             else:
-                lines.append(
-                    f"| {step.step_index} | `{_short_name(step.processor_name)}` "
-                    f"| -- | -- | -- | -- | -- | -- | -- | *skipped* |"
-                )
+                skip_dashes = "-- | -- | -- | -- | -- | -- | --"
+            lines.append(
+                f"| {step.step_index} | `{_short_name(step.processor_name)}` "
+                f"| {skip_dashes} | *skipped* |"
+            )
             continue
 
         w = step.wall_time_s
@@ -288,6 +320,14 @@ def _md_step_table(record: BenchmarkRecord) -> str:
             lines.append(
                 f"| {step.step_index} | `{_short_name(step.processor_name)}` "
                 f"| {mean_str} | {lat} | {mem} | {path} |"
+            )
+        elif show_p95:
+            lines.append(
+                f"| {step.step_index} | `{_short_name(step.processor_name)}` "
+                f"| {mean_str} | {_fmt_time(w.median)} | "
+                f"{_fmt_time(w.stddev)} | {_fmt_time(w.p95)} | "
+                f"{_fmt_time(w.min)} | {_fmt_time(w.max)} | "
+                f"{lat} | {mem} | {path} |"
             )
         else:
             lines.append(
@@ -474,63 +514,38 @@ def _md_comparison_section(comparison: ComparisonResult) -> str:
 
 
 def _md_overall_summary(records: List[BenchmarkRecord]) -> str:
-    """Build the overall summary section."""
+    """Build the overall summary section for multi-record reports.
+
+    Only called when ``len(records) > 1``.
+    """
     lines = ["## Overall Summary\n"]
 
-    if len(records) == 1:
-        r = records[0]
-        w = r.total_wall_time
-        c = r.total_cpu_time
-        m = r.total_peak_rss
-        lines.append(
-            f"**Workflow**: {r.workflow_name} v{r.workflow_version}\n"
-        )
-        if r.iterations == 1:
-            lines.append(f"- **Wall Time**: {_fmt_time(w.mean)}")
-            lines.append(f"- **CPU Time**: {_fmt_time(c.mean)}")
-            lines.append(f"- **Peak Memory**: {_fmt_bytes(m.mean)}")
-        else:
-            lines.append(
-                f"- **Wall Time**: {_fmt_time(w.mean)} mean | "
-                f"{_fmt_time(w.min)} min | {_fmt_time(w.max)} max | "
-                f"{_fmt_time(w.stddev)} stddev"
-            )
-            lines.append(
-                f"- **CPU Time**: {_fmt_time(c.mean)} mean | "
-                f"{_fmt_time(c.min)} min | {_fmt_time(c.max)} max | "
-                f"{_fmt_time(c.stddev)} stddev"
-            )
-            lines.append(
-                f"- **Peak Memory**: {_fmt_bytes(m.mean)} mean | "
-                f"{_fmt_bytes(m.min)} min | {_fmt_bytes(m.max)} max"
-            )
-    else:
-        wall_means = [r.total_wall_time.mean for r in records]
-        total_wall = sum(wall_means)
+    wall_means = [r.total_wall_time.mean for r in records]
+    total_wall = sum(wall_means)
 
-        fastest = min(records, key=lambda r: r.total_wall_time.mean)
-        slowest = max(records, key=lambda r: r.total_wall_time.mean)
-        least_mem = min(records, key=lambda r: r.total_peak_rss.mean)
-        most_mem = max(records, key=lambda r: r.total_peak_rss.mean)
+    fastest = min(records, key=lambda r: r.total_wall_time.mean)
+    slowest = max(records, key=lambda r: r.total_wall_time.mean)
+    least_mem = min(records, key=lambda r: r.total_peak_rss.mean)
+    most_mem = max(records, key=lambda r: r.total_peak_rss.mean)
 
-        lines.append(f"- **Total Benchmarks**: {len(records)}")
-        lines.append(f"- **Total Wall Time**: {_fmt_time(total_wall)}")
-        lines.append(
-            f"- **Fastest**: {fastest.workflow_name} "
-            f"({_fmt_time(fastest.total_wall_time.mean)})"
-        )
-        lines.append(
-            f"- **Slowest**: {slowest.workflow_name} "
-            f"({_fmt_time(slowest.total_wall_time.mean)})"
-        )
-        lines.append(
-            f"- **Least Memory**: {least_mem.workflow_name} "
-            f"({_fmt_bytes(least_mem.total_peak_rss.mean)})"
-        )
-        lines.append(
-            f"- **Most Memory**: {most_mem.workflow_name} "
-            f"({_fmt_bytes(most_mem.total_peak_rss.mean)})"
-        )
+    lines.append(f"- **Total Benchmarks**: {len(records)}")
+    lines.append(f"- **Total Wall Time**: {_fmt_time(total_wall)}")
+    lines.append(
+        f"- **Fastest**: {fastest.workflow_name} "
+        f"({_fmt_time(fastest.total_wall_time.mean)})"
+    )
+    lines.append(
+        f"- **Slowest**: {slowest.workflow_name} "
+        f"({_fmt_time(slowest.total_wall_time.mean)})"
+    )
+    lines.append(
+        f"- **Least Memory**: {least_mem.workflow_name} "
+        f"({_fmt_bytes(least_mem.total_peak_rss.mean)})"
+    )
+    lines.append(
+        f"- **Most Memory**: {most_mem.workflow_name} "
+        f"({_fmt_bytes(most_mem.total_peak_rss.mean)})"
+    )
 
     lines.append("")
     return "\n".join(lines)
@@ -601,8 +616,9 @@ def format_report_md(
         parts.append("---\n")
         parts.append(_md_comparison_section(comparison))
 
-    parts.append("---\n")
-    parts.append(_md_overall_summary(records))
+    if len(records) > 1:
+        parts.append("---\n")
+        parts.append(_md_overall_summary(records))
 
     return "\n".join(parts)
 

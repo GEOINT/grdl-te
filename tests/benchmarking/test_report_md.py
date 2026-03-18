@@ -150,7 +150,8 @@ class TestFormatReportMd:
         assert "## Executive Summary" in md
         assert "## Hardware & Configuration" in md
         assert "## Detailed Results" in md
-        assert "## Overall Summary" in md
+        # Single-record reports omit Overall Summary (data is in Detailed Results)
+        assert "## Overall Summary" not in md
         assert "SeqWorkflow" in md
         assert "StepA" in md
         assert "StepB" in md
@@ -268,14 +269,16 @@ class TestFormatReportMd:
         assert "System Memory" in md
         assert "Platform" in md
 
-    def test_overall_summary_single(self):
-        """Single record overall summary shows mean/min/max."""
+    def test_no_overall_summary_single(self):
+        """Single-record report omits Overall Summary (data is in Detailed Results)."""
         rec = _record("WF", [_step(0, "S", wall=5.0)])
         md = format_report_md([rec])
 
-        assert "Wall Time" in md
-        assert "CPU Time" in md
-        assert "Peak Memory" in md
+        assert "## Overall Summary" not in md
+        # Metrics still appear in the Detailed Results header
+        assert "**Wall**:" in md
+        assert "**CPU**:" in md
+        assert "**Memory**:" in md
 
     def test_overall_summary_multi(self):
         """Multi-record summary shows fastest/slowest/memory extremes."""
