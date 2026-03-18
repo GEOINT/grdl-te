@@ -616,6 +616,27 @@ def _format_step_detail(
             )
         )
     # GPU memory row omitted — field not reliably tracked at runtime.
+
+    # Throughput — only when input shape is available.
+    if step.input_shape is not None:
+        from grdl_te.benchmarking.report_md import (
+            _fmt_throughput,
+            _step_throughput_scalar,
+            _step_throughput_stats,
+        )
+        if iterations == 1:
+            tp = _step_throughput_scalar(step)
+            if tp is not None:
+                lines.append(f"{indent}Throughput:  {_fmt_throughput(tp)}")
+        else:
+            tp_stats = _step_throughput_stats(step)
+            if tp_stats is not None:
+                lines.append(
+                    f"{indent}Throughput:  {_fmt_throughput(tp_stats.mean)} mean"
+                    f"  |  {_fmt_throughput(tp_stats.min)} min"
+                    f"  |  {_fmt_throughput(tp_stats.max)} max"
+                )
+
     return lines
 
 

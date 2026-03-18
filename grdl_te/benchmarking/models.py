@@ -42,7 +42,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Third-party
 import numpy as np
@@ -443,6 +443,13 @@ class StepBenchmarkResult:
         contribute regardless of whether they are on the critical
         path — memory is process-wide.  Populated by topology
         analysis.
+    input_shape : tuple of int, optional
+        Shape of the NumPy array that was passed as input to this
+        step.  ``None`` when the input was not an ndarray.  Used
+        by report renderers to compute throughput (elements/sec).
+    input_dtype : str, optional
+        String representation of the input array's dtype (e.g.,
+        ``"float32"``).  ``None`` when the input was not an ndarray.
     """
 
     step_index: int
@@ -460,6 +467,8 @@ class StepBenchmarkResult:
     end_of_step_footprint_bytes: Optional[AggregatedMetrics] = None
     latency_pct: float = 0.0
     memory_pct: float = 0.0
+    input_shape: Optional[Tuple[int, ...]] = None
+    input_dtype: Optional[str] = None
 
     @classmethod
     def from_step_metrics(cls, metrics: list) -> 'StepBenchmarkResult':
@@ -541,6 +550,18 @@ class StepBenchmarkResult:
             else None
         )
 
+        # Extract input shape/dtype (consistent across iterations)
+        input_shape = next(
+            (tuple(s) for s in (getattr(m, 'input_shape', None) for m in metrics)
+             if s is not None),
+            None,
+        )
+        input_dtype = next(
+            (d for d in (getattr(m, 'input_dtype', None) for m in metrics)
+             if d is not None),
+            None,
+        )
+
         return cls(
             step_index=step_index,
             processor_name=processor_name,
@@ -554,6 +575,8 @@ class StepBenchmarkResult:
             concurrent=concurrent,
             peak_overhead_bytes=peak_overhead,
             end_of_step_footprint_bytes=end_footprint,
+            input_shape=input_shape,
+            input_dtype=input_dtype,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -585,6 +608,10 @@ class StepBenchmarkResult:
             d["peak_overhead_bytes"] = self.peak_overhead_bytes.to_dict()
         if self.end_of_step_footprint_bytes is not None:
             d["end_of_step_footprint_bytes"] = self.end_of_step_footprint_bytes.to_dict()
+        if self.input_shape is not None:
+            d["input_shape"] = list(self.input_shape)
+        if self.input_dtype is not None:
+            d["input_dtype"] = self.input_dtype
         return d
 
     @classmethod
@@ -627,6 +654,8 @@ class StepBenchmarkResult:
             end_of_step_footprint_bytes=end_footprint,
             latency_pct=data.get("latency_pct", 0.0),
             memory_pct=data.get("memory_pct", 0.0),
+            input_shape=tuple(data["input_shape"]) if "input_shape" in data else None,
+            input_dtype=data.get("input_dtype"),
         )
 
 

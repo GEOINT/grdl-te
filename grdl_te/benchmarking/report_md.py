@@ -87,6 +87,53 @@ def _short_name(processor_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Throughput helpers
+# ---------------------------------------------------------------------------
+def _compute_throughput(
+    input_shape: Optional[tuple],
+    wall_time_s: Optional[float],
+) -> Optional[float]:
+    """Return elements/sec or ``None`` if inputs are missing/invalid."""
+    if input_shape is None or wall_time_s is None or wall_time_s <= 0:
+        return None
+    from math import prod
+    return prod(input_shape) / wall_time_s
+
+
+def _fmt_throughput(elements_per_sec: Optional[float]) -> str:
+    """Format throughput as a human-readable string (e.g., ``26.2 Mpx/s``)."""
+    if elements_per_sec is None:
+        return "--"
+    if elements_per_sec >= 1e9:
+        return f"{elements_per_sec / 1e9:.1f} Gpx/s"
+    if elements_per_sec >= 1e6:
+        return f"{elements_per_sec / 1e6:.1f} Mpx/s"
+    if elements_per_sec >= 1e3:
+        return f"{elements_per_sec / 1e3:.1f} Kpx/s"
+    return f"{elements_per_sec:.1f} px/s"
+
+
+def _step_throughput_scalar(step: StepBenchmarkResult) -> Optional[float]:
+    """Scalar throughput from mean wall time.  Returns float or ``None``."""
+    return _compute_throughput(step.input_shape, step.wall_time_s.mean)
+
+
+def _step_throughput_stats(
+    step: StepBenchmarkResult,
+) -> Optional[AggregatedMetrics]:
+    """Per-iteration throughput as ``AggregatedMetrics``.
+
+    Returns ``None`` when input_shape is unavailable.
+    """
+    if step.input_shape is None:
+        return None
+    from math import prod
+    n_elements = prod(step.input_shape)
+    values = [n_elements / wt for wt in step.wall_time_s.values if wt > 0]
+    return AggregatedMetrics.from_values(values) if values else None
+
+
+# ---------------------------------------------------------------------------
 # Section formatters
 # ---------------------------------------------------------------------------
 def _md_header(record_count: int) -> str:
@@ -223,41 +270,48 @@ def _md_step_table(record: BenchmarkRecord) -> str:
 
     is_single_run = record.iterations == 1
     show_p95 = record.iterations > 10
+    has_throughput = any(s.input_shape is not None for s in active)
 
     # Table header — layout depends on N=1 (scalar) vs N>1 (statistics)
+    tp_hdr = " Throughput |" if has_throughput else ""
+    tp_sep = "------------|" if has_throughput else ""
     if is_single_run:
-        lines.append("| # | Step | Wall Time | Latency% | Memory% | Path |")
-        lines.append("|---|------|-----------|----------|---------|------|")
+        lines.append(f"| # | Step | Wall Time |{tp_hdr} Latency% | Memory% | Path |")
+        lines.append(f"|---|------|-----------|{tp_sep}----------|---------|------|")
     elif show_p95:
         lines.append(
-            "| # | Step | Mean | Median | StdDev | P95 | Min | Max | "
-            "Latency% | Memory% | Path |"
+            f"| # | Step | Mean | Median | StdDev | P95 | Min | Max |"
+            f"{tp_hdr} Latency% | Memory% | Path |"
         )
         lines.append(
-            "|---|------|------|--------|--------|-----|-----|-----|"
-            "----------|---------|------|"
+            f"|---|------|------|--------|--------|-----|-----|-----|"
+            f"{tp_sep}----------|---------|------|"
         )
     else:
         lines.append(
-            "| # | Step | Mean | Median | StdDev | Min | Max | "
-            "Latency% | Memory% | Path |"
+            f"| # | Step | Mean | Median | StdDev | Min | Max |"
+            f"{tp_hdr} Latency% | Memory% | Path |"
         )
         lines.append(
-            "|---|------|------|--------|--------|-----|-----|"
-            "----------|---------|------|"
+            f"|---|------|------|--------|--------|-----|-----|"
+            f"{tp_sep}----------|---------|------|"
         )
 
     for step in record.step_results:
+        tp_cell = ""
+        if has_throughput:
+            tp_cell = " -- |"
+
         if _step_was_skipped(step):
             if is_single_run:
-                skip_dashes = "-- | -- | --"
+                skip_dashes = "-- |"
             elif show_p95:
-                skip_dashes = "-- | -- | -- | -- | -- | -- | -- | --"
+                skip_dashes = "-- | -- | -- | -- | -- | -- |"
             else:
-                skip_dashes = "-- | -- | -- | -- | -- | -- | --"
+                skip_dashes = "-- | -- | -- | -- | -- |"
             lines.append(
                 f"| {step.step_index} | `{_short_name(step.processor_name)}` "
-                f"| {skip_dashes} | *skipped* |"
+                f"| {skip_dashes}{tp_cell} -- | -- | *skipped* |"
             )
             continue
 
@@ -265,6 +319,11 @@ def _md_step_table(record: BenchmarkRecord) -> str:
         mean_str = _fmt_time(w.mean)
         if step.concurrent:
             mean_str += " ‡"
+
+        # Throughput cell
+        if has_throughput:
+            tp = _step_throughput_scalar(step)
+            tp_cell = f" {_fmt_throughput(tp)} |"
 
         # Path label
         key = step.step_id or f"__idx_{step.step_index}"
@@ -289,23 +348,23 @@ def _md_step_table(record: BenchmarkRecord) -> str:
         if is_single_run:
             lines.append(
                 f"| {step.step_index} | `{_short_name(step.processor_name)}` "
-                f"| {mean_str} | {lat} | {mem} | {path} |"
+                f"| {mean_str} |{tp_cell} {lat} | {mem} | {path} |"
             )
         elif show_p95:
             lines.append(
                 f"| {step.step_index} | `{_short_name(step.processor_name)}` "
                 f"| {mean_str} | {_fmt_time(w.median)} | "
                 f"{_fmt_time(w.stddev)} | {_fmt_time(w.p95)} | "
-                f"{_fmt_time(w.min)} | {_fmt_time(w.max)} | "
-                f"{lat} | {mem} | {path} |"
+                f"{_fmt_time(w.min)} | {_fmt_time(w.max)} |"
+                f"{tp_cell} {lat} | {mem} | {path} |"
             )
         else:
             lines.append(
                 f"| {step.step_index} | `{_short_name(step.processor_name)}` "
                 f"| {mean_str} | {_fmt_time(w.median)} | "
                 f"{_fmt_time(w.stddev)} | "
-                f"{_fmt_time(w.min)} | {_fmt_time(w.max)} | "
-                f"{lat} | {mem} | {path} |"
+                f"{_fmt_time(w.min)} | {_fmt_time(w.max)} |"
+                f"{tp_cell} {lat} | {mem} | {path} |"
             )
 
     lines.append("")

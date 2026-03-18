@@ -102,6 +102,8 @@ def _step_metrics_from_dict(d: Dict[str, Any]) -> Dict[str, Any]:
         "concurrent": bool(d.get("concurrent", False)),
         "peak_overhead_bytes": int(d.get("peak_overhead_bytes", 0)),
         "end_of_step_footprint_bytes": int(d.get("end_of_step_footprint_bytes", 0)),
+        "input_shape": tuple(d["input_shape"]) if "input_shape" in d else None,
+        "input_dtype": d.get("input_dtype"),
     }
 
 

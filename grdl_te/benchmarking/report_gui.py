@@ -45,8 +45,10 @@ from grdl_te.benchmarking.models import (
 from grdl_te.benchmarking.report import _build_branch_chains
 from grdl_te.benchmarking.report_md import (
     _fmt_bytes,
+    _fmt_throughput,
     _fmt_time,
     _short_name,
+    _step_throughput_scalar,
     _step_was_skipped,
 )
 
@@ -83,6 +85,8 @@ def _step_row_data(
                 "memory_pct": round(step.memory_pct, 1),
                 "on_critical_path": step_key in critical_ids,
                 "gpu_used": step.gpu_used,
+                "throughput": _fmt_throughput(_step_throughput_scalar(step)),
+                "throughput_raw": _step_throughput_scalar(step),
             })
     return rows
 
@@ -141,6 +145,16 @@ _COMBINED_COLUMNS = [
         "sortable": True, "width": 120,
         "comparator": """function(a, b, nodeA, nodeB, isDescending) {
             return nodeA.data.peak_rss_raw - nodeB.data.peak_rss_raw;
+        }""",
+    },
+    {
+        "headerName": "Throughput", "field": "throughput",
+        "sortable": True, "width": 120,
+        "comparator": """function(a, b, nodeA, nodeB, isDescending) {
+            var ra = nodeA.data.throughput_raw, rb = nodeB.data.throughput_raw;
+            if (ra == null) return -1;
+            if (rb == null) return 1;
+            return ra - rb;
         }""",
     },
     {

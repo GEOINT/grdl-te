@@ -163,9 +163,16 @@ class ComponentBenchmark(BenchmarkRunner):
             wall_times: List[float] = []
             cpu_times: List[float] = []
             peak_rss_list: List[float] = []
+            _input_shape: Optional[tuple] = None
+            _input_dtype: Optional[str] = None
 
-            for _ in range(self._iterations):
+            for _iter_idx in range(self._iterations):
                 args, kw = self._get_args()
+
+                # Capture input shape from the first iteration
+                if _iter_idx == 0 and args and hasattr(args[0], 'shape'):
+                    _input_shape = args[0].shape
+                    _input_dtype = str(args[0].dtype) if hasattr(args[0], 'dtype') else None
 
                 snap_before = tracemalloc.take_snapshot()
                 wall_t0 = time.perf_counter()
@@ -202,6 +209,8 @@ class ComponentBenchmark(BenchmarkRunner):
             gpu_used=False,
             gpu_memory_bytes=None,
             sample_count=self._iterations,
+            input_shape=_input_shape,
+            input_dtype=_input_dtype,
         )
 
         # Auto-populate array dimension tags from array_shape (matches
