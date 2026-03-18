@@ -203,6 +203,7 @@ def _format_metrics_table(
     cpu: AggregatedMetrics,
     mem: AggregatedMetrics,
     indent: str = "     ",
+    iterations: int = 1,
 ) -> List[str]:
     """Build an aligned statistics table for wall/cpu/memory metrics.
 
@@ -216,28 +217,51 @@ def _format_metrics_table(
         Memory statistics in bytes.
     indent : str
         Whitespace prefix for each line.
+    iterations : int
+        Number of benchmark iterations.  P95 column is only shown
+        when *iterations* > 10.
 
     Returns
     -------
     List[str]
     """
-    hdr = (
-        f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
-        f"{'StdDev':>10s}  {'P95':>10s}  {'Min':>10s}  {'Max':>10s}"
-    )
-    sep = f"{indent}{THIN_RULE_CHAR * 78}"
+    show_p95 = iterations > 10
 
-    def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
-             fmt: str = ".4f") -> str:
-        return (
-            f"{indent}{label:<12s}  "
-            f"{m.mean / divisor:>10{fmt}}  "
-            f"{m.median / divisor:>10{fmt}}  "
-            f"{m.stddev / divisor:>10{fmt}}  "
-            f"{m.p95 / divisor:>10{fmt}}  "
-            f"{m.min / divisor:>10{fmt}}  "
-            f"{m.max / divisor:>10{fmt}}"
+    if show_p95:
+        hdr = (
+            f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
+            f"{'StdDev':>10s}  {'P95':>10s}  {'Min':>10s}  {'Max':>10s}"
         )
+        sep = f"{indent}{THIN_RULE_CHAR * 78}"
+
+        def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
+                 fmt: str = ".4f") -> str:
+            return (
+                f"{indent}{label:<12s}  "
+                f"{m.mean / divisor:>10{fmt}}  "
+                f"{m.median / divisor:>10{fmt}}  "
+                f"{m.stddev / divisor:>10{fmt}}  "
+                f"{m.p95 / divisor:>10{fmt}}  "
+                f"{m.min / divisor:>10{fmt}}  "
+                f"{m.max / divisor:>10{fmt}}"
+            )
+    else:
+        hdr = (
+            f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
+            f"{'StdDev':>10s}  {'Min':>10s}  {'Max':>10s}"
+        )
+        sep = f"{indent}{THIN_RULE_CHAR * 66}"
+
+        def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
+                 fmt: str = ".4f") -> str:
+            return (
+                f"{indent}{label:<12s}  "
+                f"{m.mean / divisor:>10{fmt}}  "
+                f"{m.median / divisor:>10{fmt}}  "
+                f"{m.stddev / divisor:>10{fmt}}  "
+                f"{m.min / divisor:>10{fmt}}  "
+                f"{m.max / divisor:>10{fmt}}"
+            )
 
     return [
         hdr,
@@ -253,6 +277,7 @@ def _format_metrics_table_partial(
     cpu: AggregatedMetrics,
     mem: AggregatedMetrics,
     indent: str = "     ",
+    iterations: int = 1,
 ) -> List[str]:
     """Build a statistics table for a concurrent step.
 
@@ -270,28 +295,51 @@ def _format_metrics_table_partial(
         Level-wide peak memory (shared across concurrent steps).
     indent : str
         Whitespace prefix for each line.
+    iterations : int
+        Number of benchmark iterations.  P95 column is only shown
+        when *iterations* > 10.
 
     Returns
     -------
     List[str]
     """
-    hdr = (
-        f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
-        f"{'StdDev':>10s}  {'P95':>10s}  {'Min':>10s}  {'Max':>10s}"
-    )
-    sep = f"{indent}{THIN_RULE_CHAR * 78}"
+    show_p95 = iterations > 10
 
-    def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
-             fmt: str = ".4f") -> str:
-        return (
-            f"{indent}{label:<12s}  "
-            f"{m.mean / divisor:>10{fmt}}  "
-            f"{m.median / divisor:>10{fmt}}  "
-            f"{m.stddev / divisor:>10{fmt}}  "
-            f"{m.p95 / divisor:>10{fmt}}  "
-            f"{m.min / divisor:>10{fmt}}  "
-            f"{m.max / divisor:>10{fmt}}"
+    if show_p95:
+        hdr = (
+            f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
+            f"{'StdDev':>10s}  {'P95':>10s}  {'Min':>10s}  {'Max':>10s}"
         )
+        sep = f"{indent}{THIN_RULE_CHAR * 78}"
+
+        def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
+                 fmt: str = ".4f") -> str:
+            return (
+                f"{indent}{label:<12s}  "
+                f"{m.mean / divisor:>10{fmt}}  "
+                f"{m.median / divisor:>10{fmt}}  "
+                f"{m.stddev / divisor:>10{fmt}}  "
+                f"{m.p95 / divisor:>10{fmt}}  "
+                f"{m.min / divisor:>10{fmt}}  "
+                f"{m.max / divisor:>10{fmt}}"
+            )
+    else:
+        hdr = (
+            f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
+            f"{'StdDev':>10s}  {'Min':>10s}  {'Max':>10s}"
+        )
+        sep = f"{indent}{THIN_RULE_CHAR * 66}"
+
+        def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
+                 fmt: str = ".4f") -> str:
+            return (
+                f"{indent}{label:<12s}  "
+                f"{m.mean / divisor:>10{fmt}}  "
+                f"{m.median / divisor:>10{fmt}}  "
+                f"{m.stddev / divisor:>10{fmt}}  "
+                f"{m.min / divisor:>10{fmt}}  "
+                f"{m.max / divisor:>10{fmt}}"
+            )
 
     mem_kb = mem.mean / 1024.0
     if mem_kb >= 1024 * 1024:
@@ -511,13 +559,18 @@ def _format_step_memory_table(record: BenchmarkRecord) -> List[str]:
     return lines
 
 
-def _format_step_detail(step: StepBenchmarkResult) -> List[str]:
+def _format_step_detail(
+    step: StepBenchmarkResult,
+    iterations: int = 1,
+) -> List[str]:
     """Build the detail block for a single workflow step.
 
     Parameters
     ----------
     step : StepBenchmarkResult
         Per-step aggregated metrics.
+    iterations : int
+        Number of benchmark iterations (forwarded for P95 visibility).
 
     Returns
     -------
@@ -536,6 +589,7 @@ def _format_step_detail(step: StepBenchmarkResult) -> List[str]:
             _format_metrics_table_partial(
                 step.wall_time_s, step.cpu_time_s, step.peak_rss_bytes,
                 indent=indent,
+                iterations=iterations,
             )
         )
     else:
@@ -543,19 +597,30 @@ def _format_step_detail(step: StepBenchmarkResult) -> List[str]:
             _format_metrics_table(
                 step.wall_time_s, step.cpu_time_s, step.peak_rss_bytes,
                 indent=indent,
+                iterations=iterations,
             )
         )
     if step.gpu_memory_bytes is not None:
         gm = step.gpu_memory_bytes
-        lines.append(
-            f"{indent}GPU Mem (KB)  "
-            f"{gm.mean / 1024:>10.1f}  "
-            f"{gm.median / 1024:>10.1f}  "
-            f"{gm.stddev / 1024:>10.1f}  "
-            f"{gm.p95 / 1024:>10.1f}  "
-            f"{gm.min / 1024:>10.1f}  "
-            f"{gm.max / 1024:>10.1f}"
-        )
+        if iterations > 10:
+            lines.append(
+                f"{indent}GPU Mem (KB)  "
+                f"{gm.mean / 1024:>10.1f}  "
+                f"{gm.median / 1024:>10.1f}  "
+                f"{gm.stddev / 1024:>10.1f}  "
+                f"{gm.p95 / 1024:>10.1f}  "
+                f"{gm.min / 1024:>10.1f}  "
+                f"{gm.max / 1024:>10.1f}"
+            )
+        else:
+            lines.append(
+                f"{indent}GPU Mem (KB)  "
+                f"{gm.mean / 1024:>10.1f}  "
+                f"{gm.median / 1024:>10.1f}  "
+                f"{gm.stddev / 1024:>10.1f}  "
+                f"{gm.min / 1024:>10.1f}  "
+                f"{gm.max / 1024:>10.1f}"
+            )
     return lines
 
 
@@ -582,6 +647,9 @@ def _format_record_detail(
         f"     Type: {record.benchmark_type}    "
         f"Version: {record.workflow_version}    "
         f"Iterations: {record.iterations}",
+        f"     Wall: {_fmt_time(record.total_wall_time.mean)}    "
+        f"CPU: {_fmt_time(record.total_cpu_time.mean)}    "
+        f"Memory: {_fmt_bytes(record.total_peak_rss.mean)}",
     ]
 
     if record.tags:
@@ -589,14 +657,6 @@ def _format_record_detail(
         lines.append(f"     Tags: {tag_str}")
 
     lines.append(f"     {THIN_RULE_CHAR * 72}")
-
-    lines.extend(
-        _format_metrics_table(
-            record.total_wall_time,
-            record.total_cpu_time,
-            record.total_peak_rss,
-        )
-    )
 
     lines.extend(_format_branch_chains(record))
     lines.extend(_format_step_memory_table(record))
@@ -622,7 +682,7 @@ def _format_record_detail(
                     f"  -- SKIPPED (condition not met)"
                 )
             else:
-                lines.extend(_format_step_detail(step))
+                lines.extend(_format_step_detail(step, iterations=record.iterations))
 
     return lines
 
@@ -821,7 +881,8 @@ def format_report(records: List[BenchmarkRecord]) -> str:
 
     lines.extend(_format_detailed_results(sorted_records))
     lines.extend(_format_module_summary(records))
-    lines.extend(_format_overall_summary(records))
+    if len(records) > 1:
+        lines.extend(_format_overall_summary(records))
 
     return "\n".join(lines)
 

@@ -225,14 +225,26 @@ def _md_step_table(record: BenchmarkRecord) -> str:
         f"{len(record.step_results)} total*\n"
     )
 
-    lines.append(
-        "| # | Step | Mean | Median | StdDev | P95 | Min | Max | "
-        "Latency% | Memory% | Path |"
-    )
-    lines.append(
-        "|---|------|------|--------|--------|-----|-----|-----|"
-        "----------|---------|------|"
-    )
+    show_p95 = record.iterations > 10
+
+    if show_p95:
+        lines.append(
+            "| # | Step | Mean | Median | StdDev | P95 | Min | Max | "
+            "Latency% | Memory% | Path |"
+        )
+        lines.append(
+            "|---|------|------|--------|--------|-----|-----|-----|"
+            "----------|---------|------|"
+        )
+    else:
+        lines.append(
+            "| # | Step | Mean | Median | StdDev | Min | Max | "
+            "Latency% | Memory% | Path |"
+        )
+        lines.append(
+            "|---|------|------|--------|--------|-----|-----|"
+            "----------|---------|------|"
+        )
 
     # Determine critical path set
     cp_set = set()
@@ -241,9 +253,11 @@ def _md_step_table(record: BenchmarkRecord) -> str:
 
     for step in record.step_results:
         if _step_was_skipped(step):
+            skip_dashes = "-- | -- | -- | -- | -- | -- | -- | --" if show_p95 \
+                else "-- | -- | -- | -- | -- | --"
             lines.append(
                 f"| {step.step_index} | `{_short_name(step.processor_name)}` "
-                f"| -- | -- | -- | -- | -- | -- | -- | -- | *skipped* |"
+                f"| {skip_dashes} | *skipped* |"
             )
             continue
 
@@ -265,13 +279,22 @@ def _md_step_table(record: BenchmarkRecord) -> str:
         else:
             path = "sequential"
 
-        lines.append(
-            f"| {step.step_index} | `{_short_name(step.processor_name)}` "
-            f"| {_fmt_time(w.mean)} | {_fmt_time(w.median)} | "
-            f"{_fmt_time(w.stddev)} | {_fmt_time(w.p95)} | "
-            f"{_fmt_time(w.min)} | {_fmt_time(w.max)} | "
-            f"{lat} | {mem} | {path} |"
-        )
+        if show_p95:
+            lines.append(
+                f"| {step.step_index} | `{_short_name(step.processor_name)}` "
+                f"| {_fmt_time(w.mean)} | {_fmt_time(w.median)} | "
+                f"{_fmt_time(w.stddev)} | {_fmt_time(w.p95)} | "
+                f"{_fmt_time(w.min)} | {_fmt_time(w.max)} | "
+                f"{lat} | {mem} | {path} |"
+            )
+        else:
+            lines.append(
+                f"| {step.step_index} | `{_short_name(step.processor_name)}` "
+                f"| {_fmt_time(w.mean)} | {_fmt_time(w.median)} | "
+                f"{_fmt_time(w.stddev)} | "
+                f"{_fmt_time(w.min)} | {_fmt_time(w.max)} | "
+                f"{lat} | {mem} | {path} |"
+            )
 
     lines.append("")
 
@@ -564,8 +587,9 @@ def format_report_md(
         parts.append("---\n")
         parts.append(_md_comparison_section(comparison))
 
-    parts.append("---\n")
-    parts.append(_md_overall_summary(records))
+    if len(records) > 1:
+        parts.append("---\n")
+        parts.append(_md_overall_summary(records))
 
     return "\n".join(parts)
 

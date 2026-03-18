@@ -154,12 +154,14 @@ class TestFormatReport:
         assert "BetaBench" in report
 
     def test_contains_statistics_columns(self):
-        """Report includes full statistical column headers."""
-        report = format_report([_make_record()])
+        """Report includes statistical column headers (P95 only when iterations > 10)."""
+        record = _make_record(step_results=[_make_step()])
+        report = format_report([record])
         assert "Mean" in report
         assert "Median" in report
         assert "StdDev" in report
-        assert "P95" in report
+        # Default test record has iterations=5, so P95 should be hidden
+        assert "P95" not in report
         assert "Min" in report
         assert "Max" in report
 
@@ -193,13 +195,10 @@ class TestFormatReport:
         assert "Slowest:" in report
         assert "Total Benchmarks:" in report
 
-    def test_single_record(self):
-        """Single-record summary shows iteration-level statistics."""
+    def test_single_record_no_overall_summary(self):
+        """Single-record report omits Overall Summary (data is in Detailed Results)."""
         report = format_report([_make_record()])
-        assert "OVERALL SUMMARY" in report
-        assert "Wall Time:" in report
-        assert "CPU Time:" in report
-        assert "Peak Memory:" in report
+        assert "OVERALL SUMMARY" not in report
         # Multi-record fields should NOT appear
         assert "Fastest:" not in report
         assert "Total Benchmarks:" not in report
@@ -335,7 +334,6 @@ class TestPrintReport:
         print_report([_make_record()])
         captured = capsys.readouterr()
         assert "GRDL BENCHMARK REPORT" in captured.out
-        assert "OVERALL SUMMARY" in captured.out
 
 
 # ---------------------------------------------------------------------------

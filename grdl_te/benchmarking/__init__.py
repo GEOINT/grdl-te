@@ -74,6 +74,7 @@ __all__ = [
     "compute_memory_contributions",
     "format_report",
     "format_report_md",
+    "launch_ui",
     "print_report",
     "run_suite",
     "save_report",
@@ -86,4 +87,7 @@ def __getattr__(name: str):
     if name == "ActiveBenchmarkRunner":
         from grdl_te.benchmarking.active import ActiveBenchmarkRunner
         return ActiveBenchmarkRunner
+    if name == "launch_ui":
+        from grdl_te.benchmarking.report_gui import launch_ui
+        return launch_ui
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
