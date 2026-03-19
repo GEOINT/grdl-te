@@ -73,8 +73,7 @@ def _step_metrics_from_dict(d: Dict[str, Any]) -> Dict[str, Any]:
     """Coerce a step_metrics entry to StepMetrics constructor kwargs.
 
     Applies defaults for optional fields so that traces from older
-    grdl-runtime versions (missing ``peak_overhead_bytes`` etc.) still
-    parse correctly.
+    grdl-runtime versions still parse correctly.
 
     Parameters
     ----------
@@ -100,8 +99,6 @@ def _step_metrics_from_dict(d: Dict[str, Any]) -> Dict[str, Any]:
         "global_pass_duration": d.get("global_pass_duration"),
         "global_pass_memory": d.get("global_pass_memory"),
         "concurrent": bool(d.get("concurrent", False)),
-        "peak_overhead_bytes": int(d.get("peak_overhead_bytes", 0)),
-        "end_of_step_footprint_bytes": int(d.get("end_of_step_footprint_bytes", 0)),
         "input_shape": tuple(d["input_shape"]) if "input_shape" in d else None,
         "input_dtype": d.get("input_dtype"),
     }

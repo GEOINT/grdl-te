@@ -44,7 +44,6 @@ from grdl_te.benchmarking.models import (
 from grdl_te.benchmarking.topology import (
     classify_topology,
     compute_latency_contributions,
-    compute_memory_contributions,
 )
 from grdl_te.benchmarking.comparison import compare_records
 from grdl_te.benchmarking.report_md import format_report_md
@@ -197,18 +196,14 @@ class TestAutoClassification:
 
         # Step 2: Compute contributions
         lat_pcts = compute_latency_contributions(rec, topo)
-        mem_pcts = compute_memory_contributions(rec)
 
         assert lat_pcts["__idx_0"] == pytest.approx(20.0)
         assert lat_pcts["__idx_1"] == pytest.approx(80.0)
-        assert mem_pcts["__idx_0"] == pytest.approx(25.0)
-        assert mem_pcts["__idx_1"] == pytest.approx(75.0)
 
         # Wire contributions onto steps
         for sr in rec.step_results:
             key = sr.step_id or f"__idx_{sr.step_index}"
             sr.latency_pct = lat_pcts.get(key, 0.0)
-            sr.memory_pct = mem_pcts.get(key, 0.0)
 
         # Step 3: Generate report
         md = format_report_md([rec])
@@ -217,7 +212,6 @@ class TestAutoClassification:
         assert "Read" in md
         assert "Process" in md
         assert "80.0%" in md
-        assert "75.0%" in md
 
 
 # ---------------------------------------------------------------------------
@@ -251,18 +245,14 @@ class TestParallelEndToEnd:
 
         # Contributions
         lat_pcts = compute_latency_contributions(rec, topo)
-        mem_pcts = compute_memory_contributions(rec)
 
         # BranchB is NOT on critical path → latency 0%
         assert lat_pcts["branch_b"] == pytest.approx(0.0)
-        # But BranchB still has memory contribution
-        assert mem_pcts["branch_b"] > 0
 
         # Wire and report
         for sr in rec.step_results:
             key = sr.step_id or f"__idx_{sr.step_index}"
             sr.latency_pct = lat_pcts.get(key, 0.0)
-            sr.memory_pct = mem_pcts.get(key, 0.0)
 
         md = format_report_md([rec])
         assert "Time Decomposition" in md

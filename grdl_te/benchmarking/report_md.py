@@ -11,6 +11,11 @@ comparison tables.
 Every report includes full per-step data for all workflows benchmarked.
 Comparisons are an additional summary section, never a replacement.
 
+This module is a thin presenter.  All data derivations (bottleneck
+ranking, throughput, branch chains, path classification, etc.) are
+performed by ``report_engine.build_report_data()``.  Section formatters
+here only convert numeric values into Markdown text.
+
 Dependencies
 ------------
 numpy
@@ -30,7 +35,7 @@ Created
 
 Modified
 --------
-2026-03-04
+2026-03-19
 """
 
 # Standard library
@@ -42,6 +47,13 @@ from typing import Dict, List, Optional
 import numpy as np
 
 # Internal
+from grdl_te.benchmarking._formatting import (
+    fmt_bytes as _fmt_bytes,
+    fmt_throughput as _fmt_throughput,
+    fmt_time as _fmt_time,
+    short_name as _short_name,
+)
+from grdl_te.benchmarking.comparison import ComparisonResult, compare_records
 from grdl_te.benchmarking.models import (
     AggregatedMetrics,
     BenchmarkRecord,
@@ -50,91 +62,21 @@ from grdl_te.benchmarking.models import (
     TopologyDescriptor,
     WorkflowTopology,
 )
-from grdl_te.benchmarking.comparison import ComparisonResult, compare_records
-from grdl_te.benchmarking.report import _build_branch_chains
+from grdl_te.benchmarking.report_engine import (
+    BottleneckEntry,
+    RecordReportData,
+    ReportData,
+    StepReportData,
+    build_report_data,
+    compute_throughput as _compute_throughput,
+    step_throughput_scalar as _step_throughput_scalar,
+    step_throughput_stats as _step_throughput_stats,
+    step_was_skipped as _step_was_skipped,
+)
 
 
 # ---------------------------------------------------------------------------
-# Unit formatting helpers
-# ---------------------------------------------------------------------------
-def _fmt_bytes(value_bytes: float) -> str:
-    """Format a byte count as a human-readable string."""
-    abs_val = abs(value_bytes)
-    if abs_val < 1024:
-        return f"{value_bytes:.0f} B"
-    if abs_val < 1024 ** 2:
-        return f"{value_bytes / 1024:.1f} KB"
-    if abs_val < 1024 ** 3:
-        return f"{value_bytes / 1024 ** 2:.1f} MB"
-    return f"{value_bytes / 1024 ** 3:.2f} GB"
-
-
-def _fmt_time(seconds: float) -> str:
-    """Format a duration in seconds with appropriate precision."""
-    if abs(seconds) < 1.0:
-        return f"{seconds:.4f}s"
-    return f"{seconds:.2f}s"
-
-
-def _step_was_skipped(step: StepBenchmarkResult) -> bool:
-    """Return True if a step was skipped."""
-    return step.wall_time_s.max == 0.0 and step.cpu_time_s.max == 0.0
-
-
-def _short_name(processor_name: str) -> str:
-    """Extract short processor name."""
-    return processor_name.rsplit(".", 1)[-1]
-
-
-# ---------------------------------------------------------------------------
-# Throughput helpers
-# ---------------------------------------------------------------------------
-def _compute_throughput(
-    input_shape: Optional[tuple],
-    wall_time_s: Optional[float],
-) -> Optional[float]:
-    """Return elements/sec or ``None`` if inputs are missing/invalid."""
-    if input_shape is None or wall_time_s is None or wall_time_s <= 0:
-        return None
-    from math import prod
-    return prod(input_shape) / wall_time_s
-
-
-def _fmt_throughput(elements_per_sec: Optional[float]) -> str:
-    """Format throughput as a human-readable string (e.g., ``26.2 Mpx/s``)."""
-    if elements_per_sec is None:
-        return "--"
-    if elements_per_sec >= 1e9:
-        return f"{elements_per_sec / 1e9:.1f} Gpx/s"
-    if elements_per_sec >= 1e6:
-        return f"{elements_per_sec / 1e6:.1f} Mpx/s"
-    if elements_per_sec >= 1e3:
-        return f"{elements_per_sec / 1e3:.1f} Kpx/s"
-    return f"{elements_per_sec:.1f} px/s"
-
-
-def _step_throughput_scalar(step: StepBenchmarkResult) -> Optional[float]:
-    """Scalar throughput from mean wall time.  Returns float or ``None``."""
-    return _compute_throughput(step.input_shape, step.wall_time_s.mean)
-
-
-def _step_throughput_stats(
-    step: StepBenchmarkResult,
-) -> Optional[AggregatedMetrics]:
-    """Per-iteration throughput as ``AggregatedMetrics``.
-
-    Returns ``None`` when input_shape is unavailable.
-    """
-    if step.input_shape is None:
-        return None
-    from math import prod
-    n_elements = prod(step.input_shape)
-    values = [n_elements / wt for wt in step.wall_time_s.values if wt > 0]
-    return AggregatedMetrics.from_values(values) if values else None
-
-
-# ---------------------------------------------------------------------------
-# Section formatters
+# Section formatters — pure presentation
 # ---------------------------------------------------------------------------
 def _md_header(record_count: int) -> str:
     """Build the report header."""
@@ -146,58 +88,33 @@ def _md_header(record_count: int) -> str:
 
 
 def _resolve_array_size(record: BenchmarkRecord) -> str:
-    """Derive a human-readable array size from record tags.
-
-    Both ``ActiveBenchmarkRunner`` and ``ComponentBenchmark`` auto-populate
-    ``array_size``, ``rows``, and ``cols`` tags from the ``BenchmarkSource``
-    when one is provided.  This function reads those tags.
-    """
+    """Derive a human-readable array size from record tags."""
     return record.tags.get("array_size", "")
 
 
 def _md_executive_summary(
-    records: List[BenchmarkRecord],
-    comparison: Optional[ComparisonResult],
+    data: ReportData,
 ) -> str:
-    """Build the executive summary with bottleneck identification."""
+    """Build the executive summary from pre-computed bottlenecks."""
     lines = ["## Executive Summary\n"]
 
-    # Bottleneck table
-    if comparison and comparison.bottlenecks:
-        bns = comparison.bottlenecks[:5]
-    else:
-        # Single record — collect from step results directly
-        bns = []
-        for rec in records:
-            for step in rec.step_results:
-                if _step_was_skipped(step):
-                    continue
-                bns.append({
-                    "step_name": _short_name(step.processor_name),
-                    "latency_pct": step.latency_pct,
-                    "memory_pct": step.memory_pct,
-                    "workflow": rec.workflow_name,
-                    "wall_time_s": step.wall_time_s.mean,
-                })
-        bns.sort(key=lambda e: (e["latency_pct"], e["memory_pct"]), reverse=True)
-        bns = bns[:5]
-
+    bns = data.bottlenecks
     if bns:
         top = bns[0]
         lines.append(
-            f"> **Top Bottleneck**: `{top['step_name']}` accounts for "
-            f"**{top['latency_pct']:.1f}%** of latency"
-            f" ({_fmt_time(top['wall_time_s'])} mean wall time)"
-            f" in *{top['workflow']}*.\n"
+            f"> **Top Bottleneck**: `{top.step_name}` accounts for "
+            f"**{top.latency_pct:.1f}%** of latency"
+            f" ({_fmt_time(top.wall_time_s)} mean wall time)"
+            f" in *{top.workflow}*.\n"
         )
-        lines.append("| Rank | Step | Latency % | Memory % | Workflow | Mean Wall |")
-        lines.append("|------|------|-----------|----------|----------|-----------|")
-        for i, bn in enumerate(bns, 1):
-            lat = "--" if bn["latency_pct"] == 0.0 else f"{bn['latency_pct']:.1f}%"
+        lines.append("| Rank | Step | Latency % | Workflow | Mean Wall |")
+        lines.append("|------|------|-----------|----------|-----------|")
+        for bn in bns:
+            lat = "--" if bn.latency_pct == 0.0 else f"{bn.latency_pct:.1f}%"
             lines.append(
-                f"| {i} | `{bn['step_name']}` | {lat} | "
-                f"{bn['memory_pct']:.1f}% | {bn['workflow']} | "
-                f"{_fmt_time(bn['wall_time_s'])} |"
+                f"| {bn.rank} | `{bn.step_name}` | {lat} | "
+                f"{bn.workflow} | "
+                f"{_fmt_time(bn.wall_time_s)} |"
             )
         lines.append("")
 
@@ -242,16 +159,14 @@ def _md_configuration(records: List[BenchmarkRecord]) -> str:
     return "\n".join(lines)
 
 
-def _md_step_table(record: BenchmarkRecord) -> str:
-    """Build per-step performance table with latency% and memory%."""
-    active = [s for s in record.step_results if not _step_was_skipped(s)]
-    skipped = [s for s in record.step_results if _step_was_skipped(s)]
+def _md_step_table(rd: RecordReportData) -> str:
+    """Build per-step performance table from pre-computed step data."""
+    active = [s for s in rd.steps if not s.skipped]
+    skipped = [s for s in rd.steps if s.skipped]
     parallel = [s for s in active if s.concurrent]
 
     lines = ["#### Step Performance\n"]
 
-    # Summary line — only shown when there is something to say
-    # (skipped steps or a parallel sub-count to report).
     if skipped or parallel:
         summary_parts = [f"{len(active)} ran"]
         if parallel:
@@ -260,49 +175,50 @@ def _md_step_table(record: BenchmarkRecord) -> str:
             summary_parts.append(f"{len(skipped)} skipped")
         lines.append(
             f"*{', '.join(summary_parts)} / "
-            f"{len(record.step_results)} total*\n"
+            f"{len(rd.steps)} total*\n"
         )
 
-    # Determine critical path set
-    cp_set = set()
-    if record.topology:
-        cp_set = set(record.topology.critical_path_step_ids)
+    is_single_run = rd.iterations == 1
+    show_p95 = rd.iterations > 10
+    has_throughput = any(s.throughput_scalar is not None for s in active)
+    has_gpu = any(s.gpu_used for s in active)
 
-    is_single_run = record.iterations == 1
-    show_p95 = record.iterations > 10
-    has_throughput = any(s.input_shape is not None for s in active)
-
-    # Table header — layout depends on N=1 (scalar) vs N>1 (statistics)
+    # Optional column fragments
     tp_hdr = " Throughput |" if has_throughput else ""
     tp_sep = "------------|" if has_throughput else ""
+    gpu_hdr = " GPU |" if has_gpu else ""
+    gpu_sep = "-----|" if has_gpu else ""
+
+    # Table header
     if is_single_run:
-        lines.append(f"| # | Step | Wall Time |{tp_hdr} Latency% | Memory% | Path |")
-        lines.append(f"|---|------|-----------|{tp_sep}----------|---------|------|")
+        lines.append(f"| # | Step | Wall Time |{tp_hdr} Latency% | Path |{gpu_hdr}")
+        lines.append(f"|---|------|-----------|{tp_sep}----------|------|{gpu_sep}")
     elif show_p95:
         lines.append(
             f"| # | Step | Mean | Median | StdDev | P95 | Min | Max |"
-            f"{tp_hdr} Latency% | Memory% | Path |"
+            f"{tp_hdr} Latency% | Path |{gpu_hdr}"
         )
         lines.append(
             f"|---|------|------|--------|--------|-----|-----|-----|"
-            f"{tp_sep}----------|---------|------|"
+            f"{tp_sep}----------|------|{gpu_sep}"
         )
     else:
         lines.append(
             f"| # | Step | Mean | Median | StdDev | Min | Max |"
-            f"{tp_hdr} Latency% | Memory% | Path |"
+            f"{tp_hdr} Latency% | Path |{gpu_hdr}"
         )
         lines.append(
             f"|---|------|------|--------|--------|-----|-----|"
-            f"{tp_sep}----------|---------|------|"
+            f"{tp_sep}----------|------|{gpu_sep}"
         )
 
-    for step in record.step_results:
+    for step in rd.steps:
         tp_cell = ""
         if has_throughput:
             tp_cell = " -- |"
+        gpu_cell = " |" if has_gpu else ""
 
-        if _step_was_skipped(step):
+        if step.skipped:
             if is_single_run:
                 skip_dashes = "-- |"
             elif show_p95:
@@ -310,72 +226,59 @@ def _md_step_table(record: BenchmarkRecord) -> str:
             else:
                 skip_dashes = "-- | -- | -- | -- | -- |"
             lines.append(
-                f"| {step.step_index} | `{_short_name(step.processor_name)}` "
-                f"| {skip_dashes}{tp_cell} -- | -- | *skipped* |"
+                f"| {step.step_index} | `{step.short_name}` "
+                f"| {skip_dashes}{tp_cell} -- | *skipped* |{gpu_cell}"
             )
             continue
 
-        w = step.wall_time_s
+        w = step.wall_time
         mean_str = _fmt_time(w.mean)
         if step.concurrent:
             mean_str += " ‡"
 
         # Throughput cell
         if has_throughput:
-            tp = _step_throughput_scalar(step)
-            tp_cell = f" {_fmt_throughput(tp)} |"
+            tp_cell = f" {_fmt_throughput(step.throughput_scalar)} |"
 
-        # Path label
-        key = step.step_id or f"__idx_{step.step_index}"
-        if key in cp_set:
-            path = "critical"
-        elif step.concurrent:
-            path = "parallel"
-        else:
-            path = "sequential"
+        # GPU cell
+        if has_gpu:
+            gpu_cell = " \u2714 |" if step.gpu_used else " |"
 
-        # Latency%: non-critical concurrent steps show -- (their wall time is
-        # hidden by the critical path — showing 0% would be misleading).
-        if step.concurrent and key not in cp_set:
+        # Path label (pre-computed by engine)
+        path = step.path_classification
+
+        # Latency%: non-critical concurrent steps show --
+        if step.concurrent and not step.on_critical_path:
             lat = "--"
         else:
             lat = f"{step.latency_pct:.1f}%"
 
-        mem = f"{step.memory_pct:.1f}%"
-        if step.concurrent:
-            mem += "†"
-
         if is_single_run:
             lines.append(
-                f"| {step.step_index} | `{_short_name(step.processor_name)}` "
-                f"| {mean_str} |{tp_cell} {lat} | {mem} | {path} |"
+                f"| {step.step_index} | `{step.short_name}` "
+                f"| {mean_str} |{tp_cell} {lat} | {path} |{gpu_cell}"
             )
         elif show_p95:
             lines.append(
-                f"| {step.step_index} | `{_short_name(step.processor_name)}` "
+                f"| {step.step_index} | `{step.short_name}` "
                 f"| {mean_str} | {_fmt_time(w.median)} | "
                 f"{_fmt_time(w.stddev)} | {_fmt_time(w.p95)} | "
                 f"{_fmt_time(w.min)} | {_fmt_time(w.max)} |"
-                f"{tp_cell} {lat} | {mem} | {path} |"
+                f"{tp_cell} {lat} | {path} |{gpu_cell}"
             )
         else:
             lines.append(
-                f"| {step.step_index} | `{_short_name(step.processor_name)}` "
+                f"| {step.step_index} | `{step.short_name}` "
                 f"| {mean_str} | {_fmt_time(w.median)} | "
                 f"{_fmt_time(w.stddev)} | "
                 f"{_fmt_time(w.min)} | {_fmt_time(w.max)} |"
-                f"{tp_cell} {lat} | {mem} | {path} |"
+                f"{tp_cell} {lat} | {path} |{gpu_cell}"
             )
 
     lines.append("")
 
-    # Footnotes — only for concurrent steps
-    has_parallel = bool(parallel)
-    if has_parallel:
-        lines.append(
-            "*† Memory shared across concurrent steps "
-            "(tracemalloc is process-wide)*"
-        )
+    # Footnotes
+    if parallel:
         lines.append(
             "*‡ Wall time measured under resource contention — "
             "not comparable to isolated standalone execution time.*\n"
@@ -384,20 +287,18 @@ def _md_step_table(record: BenchmarkRecord) -> str:
     return "\n".join(lines)
 
 
-def _md_time_decomposition(record: BenchmarkRecord) -> str:
-    """Build time decomposition table for parallel/mixed workflows."""
-    if not record.topology:
-        return ""
-    topo = record.topology
-    if topo.topology in (WorkflowTopology.COMPONENT, WorkflowTopology.SEQUENTIAL):
+def _md_time_decomposition(rd: RecordReportData) -> str:
+    """Build time decomposition table from pre-computed data."""
+    td = rd.time_decomposition
+    if td is None:
         return ""
 
     lines = ["#### Time Decomposition\n"]
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
-    lines.append(f"| Wall Clock (actual elapsed) | {_fmt_time(record.total_wall_time.mean)} |")
-    lines.append(f"| Critical Path (longest chain) | {_fmt_time(topo.critical_path_wall_time_s)} |")
-    lines.append(f"| Contended Step Sum ‡ | {_fmt_time(topo.sum_of_steps_wall_time_s)} |")
+    lines.append(f"| Wall Clock (actual elapsed) | {_fmt_time(td.wall_clock_s)} |")
+    lines.append(f"| Critical Path (longest chain) | {_fmt_time(td.critical_path_s)} |")
+    lines.append(f"| Contended Step Sum ‡ | {_fmt_time(td.contended_step_sum_s)} |")
     lines.append("")
     lines.append(
         "*‡ Step times were measured under resource contention — "
@@ -407,110 +308,57 @@ def _md_time_decomposition(record: BenchmarkRecord) -> str:
     return "\n".join(lines)
 
 
-def _md_branch_analysis(record: BenchmarkRecord) -> str:
-    """Build branch analysis section from depends_on graph."""
-    if not record.topology:
-        return ""
-    topo = record.topology
-    if topo.topology in (WorkflowTopology.COMPONENT, WorkflowTopology.SEQUENTIAL):
+def _md_branch_analysis(rd: RecordReportData) -> str:
+    """Build branch analysis section from pre-computed branches."""
+    branches = rd.branches
+    if len(branches) < 2:
         return ""
 
-    chains = _build_branch_chains(record.step_results)
-    if len(chains) < 2:
-        return ""
-
-    chain_times = [sum(s.wall_time_s.mean for s in c) for c in chains]
-    critical_time = max(chain_times) if chain_times else 0.0
+    critical_time = max(b.chain_time_s for b in branches)
 
     lines = ["#### Branch Analysis\n"]
-    lines.append(f"*{len(chains)} branches, critical path: {_fmt_time(critical_time)}*\n")
+    lines.append(f"*{len(branches)} branches, critical path: {_fmt_time(critical_time)}*\n")
     lines.append("| Branch | Steps | Chain Time | Status |")
     lines.append("|--------|-------|------------|--------|")
 
-    for i, (chain, ct) in enumerate(zip(chains, chain_times)):
-        step_names = " → ".join(
-            _short_name(s.processor_name) for s in chain
-        )
-        if ct >= critical_time - 1e-9:
+    for b in branches:
+        step_names = " → ".join(b.step_names)
+        if b.is_critical:
             status = "**critical path**"
         else:
-            idle = critical_time - ct
-            status = f"idle {_fmt_time(idle)}"
+            status = f"idle {_fmt_time(b.idle_time_s)}"
         lines.append(
-            f"| {i + 1} | {step_names} | {_fmt_time(ct)} | {status} |"
+            f"| {b.branch_index} | {step_names} | {_fmt_time(b.chain_time_s)} | {status} |"
         )
 
     lines.append("")
     return "\n".join(lines)
 
 
-def _md_memory_profile(record: BenchmarkRecord) -> str:
-    """Build memory profile table."""
-    active = [s for s in record.step_results if not _step_was_skipped(s)]
-    has_new_mem = any(
-        s.peak_overhead_bytes is not None
-        or s.end_of_step_footprint_bytes is not None
-        for s in active
-    )
-    if not has_new_mem:
-        return ""
+def _md_record_detail(index: int, rd: RecordReportData) -> str:
+    """Build the complete detail section for a single record."""
+    topo_label = f" ({rd.topology_label})" if rd.topology_label else ""
 
-    lines = ["#### Memory Profile\n"]
-    lines.append("| Step | Peak Overhead | End-of-Step Footprint | Memory% |")
-    lines.append("|------|-------------|----------------------|---------|")
+    lines = [f"### {index}. {rd.workflow_name}{topo_label}\n"]
 
-    for step in active:
-        name = _short_name(step.processor_name)
-        overhead = (
-            _fmt_bytes(step.peak_overhead_bytes.mean)
-            if step.peak_overhead_bytes is not None
-            else "N/A"
-        )
-        footprint = (
-            _fmt_bytes(step.end_of_step_footprint_bytes.mean)
-            if step.end_of_step_footprint_bytes is not None
-            else "N/A"
-        )
-        mem_str = f"{step.memory_pct:.1f}%"
-        if step.concurrent:
-            mem_str += " (concurrent)"
-        lines.append(
-            f"| `{name}` | {overhead} | {footprint} | {mem_str} |"
-        )
-
-    overall = _fmt_bytes(record.total_peak_rss.mean)
-    lines.append(f"| **Overall Workflow Peak** | **{overall}** | *(high-water mark)* | |")
-    lines.append("")
-
-    return "\n".join(lines)
-
-
-def _md_record_detail(index: int, record: BenchmarkRecord) -> str:
-    """Build the complete detail section for a single benchmark record."""
-    topo_label = ""
-    if record.topology:
-        topo_label = f" ({record.topology.topology.value})"
-
-    lines = [f"### {index}. {record.workflow_name}{topo_label}\n"]
-
+    rec = rd.record
     lines.append(
-        f"**Type**: {record.benchmark_type} | "
-        f"**Version**: {record.workflow_version} | "
-        f"**Iterations**: {record.iterations} | "
-        f"**Wall**: {_fmt_time(record.total_wall_time.mean)} | "
-        f"**CPU**: {_fmt_time(record.total_cpu_time.mean)} | "
-        f"**Memory**: {_fmt_bytes(record.total_peak_rss.mean)}"
+        f"**Type**: {rd.benchmark_type} | "
+        f"**Version**: {rd.workflow_version} | "
+        f"**Iterations**: {rd.iterations} | "
+        f"**Wall**: {_fmt_time(rec.total_wall_time.mean)} | "
+        f"**CPU**: {_fmt_time(rec.total_cpu_time.mean)} | "
+        f"**Memory**: {_fmt_bytes(rec.total_peak_rss.mean)}"
     )
 
-    if record.tags:
-        tag_str = ", ".join(f"`{k}={v}`" for k, v in sorted(record.tags.items()))
+    if rec.tags:
+        tag_str = ", ".join(f"`{k}={v}`" for k, v in sorted(rec.tags.items()))
         lines.append(f"\n**Tags**: {tag_str}")
 
     lines.append("")
-    lines.append(_md_step_table(record))
-    lines.append(_md_time_decomposition(record))
-    lines.append(_md_branch_analysis(record))
-    lines.append(_md_memory_profile(record))
+    lines.append(_md_step_table(rd))
+    lines.append(_md_time_decomposition(rd))
+    lines.append(_md_branch_analysis(rd))
 
     return "\n".join(lines)
 
@@ -522,7 +370,6 @@ def _md_comparison_section(comparison: ComparisonResult) -> str:
 
     lines = ["## Comparison\n"]
 
-    # Workflow summary
     lines.append("### Workflow Summary\n")
     lines.append("| Workflow | Topology | Wall Time | CPU Time | Peak Memory | Steps |")
     lines.append("|----------|----------|-----------|----------|-------------|-------|")
@@ -542,38 +389,30 @@ def _md_comparison_section(comparison: ComparisonResult) -> str:
     return "\n".join(lines)
 
 
-def _md_overall_summary(records: List[BenchmarkRecord]) -> str:
-    """Build the overall summary section for multi-record reports.
+def _md_overall_summary(data: ReportData) -> str:
+    """Build the overall summary section from pre-computed data."""
+    s = data.overall_summary
+    if s is None:
+        return ""
 
-    Only called when ``len(records) > 1``.
-    """
     lines = ["## Overall Summary\n"]
-
-    wall_means = [r.total_wall_time.mean for r in records]
-    total_wall = sum(wall_means)
-
-    fastest = min(records, key=lambda r: r.total_wall_time.mean)
-    slowest = max(records, key=lambda r: r.total_wall_time.mean)
-    least_mem = min(records, key=lambda r: r.total_peak_rss.mean)
-    most_mem = max(records, key=lambda r: r.total_peak_rss.mean)
-
-    lines.append(f"- **Total Benchmarks**: {len(records)}")
-    lines.append(f"- **Total Wall Time**: {_fmt_time(total_wall)}")
+    lines.append(f"- **Total Benchmarks**: {s.total_benchmarks}")
+    lines.append(f"- **Total Wall Time**: {_fmt_time(s.total_wall_time_s)}")
     lines.append(
-        f"- **Fastest**: {fastest.workflow_name} "
-        f"({_fmt_time(fastest.total_wall_time.mean)})"
+        f"- **Fastest**: {s.fastest_name} "
+        f"({_fmt_time(s.fastest_wall_s)})"
     )
     lines.append(
-        f"- **Slowest**: {slowest.workflow_name} "
-        f"({_fmt_time(slowest.total_wall_time.mean)})"
+        f"- **Slowest**: {s.slowest_name} "
+        f"({_fmt_time(s.slowest_wall_s)})"
     )
     lines.append(
-        f"- **Least Memory**: {least_mem.workflow_name} "
-        f"({_fmt_bytes(least_mem.total_peak_rss.mean)})"
+        f"- **Least Memory**: {s.least_memory_name} "
+        f"({_fmt_bytes(s.least_memory_bytes)})"
     )
     lines.append(
-        f"- **Most Memory**: {most_mem.workflow_name} "
-        f"({_fmt_bytes(most_mem.total_peak_rss.mean)})"
+        f"- **Most Memory**: {s.most_memory_name} "
+        f"({_fmt_bytes(s.most_memory_bytes)})"
     )
 
     lines.append("")
@@ -614,40 +453,33 @@ def format_report_md(
     if not records:
         raise ValueError("Cannot generate report from empty records list.")
 
-    if comparison is None and len(records) > 1:
-        comparison = compare_records(records)
+    data = build_report_data(records, comparison)
 
     parts: List[str] = []
 
-    parts.append(_md_header(len(records)))
+    parts.append(_md_header(data.record_count))
     parts.append("---\n")
-    parts.append(_md_executive_summary(records, comparison))
+    parts.append(_md_executive_summary(data))
     parts.append("---\n")
-    if records[0].hardware is not None:
-        parts.append(_md_hardware(records[0].hardware))
+    if data.hardware is not None:
+        parts.append(_md_hardware(data.hardware))
     else:
         parts.append("## Hardware\n\n> Hardware information missing.\n")
     parts.append(_md_configuration(records))
     parts.append("---\n")
 
-    # Detailed results — sorted by wall time descending (slowest first)
-    sorted_records = sorted(
-        records,
-        key=lambda r: r.total_wall_time.mean,
-        reverse=True,
-    )
-
+    # Detailed results (already sorted slowest-first by engine)
     parts.append("## Detailed Results\n")
-    for i, record in enumerate(sorted_records, start=1):
-        parts.append(_md_record_detail(i, record))
+    for i, rd in enumerate(data.records, start=1):
+        parts.append(_md_record_detail(i, rd))
 
-    if comparison and len(records) > 1:
+    if data.comparison and data.record_count > 1:
         parts.append("---\n")
-        parts.append(_md_comparison_section(comparison))
+        parts.append(_md_comparison_section(data.comparison))
 
-    if len(records) > 1:
+    if data.record_count > 1:
         parts.append("---\n")
-        parts.append(_md_overall_summary(records))
+        parts.append(_md_overall_summary(data))
 
     return "\n".join(parts)
 

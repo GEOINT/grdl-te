@@ -69,7 +69,6 @@ def _step(
     step_id: str = None,
     depends_on: list = None,
     latency_pct: float = 0.0,
-    memory_pct: float = 0.0,
 ) -> StepBenchmarkResult:
     s = StepBenchmarkResult(
         step_index=index,
@@ -83,7 +82,6 @@ def _step(
         step_id=step_id,
         depends_on=depends_on or [],
         latency_pct=latency_pct,
-        memory_pct=memory_pct,
     )
     return s
 
@@ -137,8 +135,8 @@ class TestFormatReportMd:
     def test_single_sequential_record(self):
         """Single sequential record produces valid markdown."""
         steps = [
-            _step(0, "StepA", wall=3.0, latency_pct=30.0, memory_pct=40.0),
-            _step(1, "StepB", wall=7.0, latency_pct=70.0, memory_pct=60.0),
+            _step(0, "StepA", wall=3.0, latency_pct=30.0),
+            _step(1, "StepB", wall=7.0, latency_pct=70.0),
         ]
         rec = _record(
             "SeqWorkflow", steps,
@@ -159,7 +157,7 @@ class TestFormatReportMd:
     def test_single_component_record(self):
         """Component record shows correct topology label."""
         steps = [
-            _step(0, "MyFunc", wall=0.5, latency_pct=100.0, memory_pct=100.0),
+            _step(0, "MyFunc", wall=0.5, latency_pct=100.0),
         ]
         rec = _record(
             "MyFunc", steps,
@@ -175,9 +173,9 @@ class TestFormatReportMd:
         """Parallel workflow shows time decomposition and path labels."""
         steps = [
             _step(0, "CritStep", wall=5.0, concurrent=True,
-                  step_id="crit", latency_pct=100.0, memory_pct=50.0),
+                  step_id="crit", latency_pct=100.0),
             _step(1, "NonCritStep", wall=2.0, concurrent=True,
-                  step_id="noncrit", latency_pct=0.0, memory_pct=50.0),
+                  step_id="noncrit", latency_pct=0.0),
         ]
         topo = TopologyDescriptor(
             topology=WorkflowTopology.PARALLEL,
@@ -197,8 +195,6 @@ class TestFormatReportMd:
         assert "--" in md
         # Concurrent wall times have contention marker
         assert "‡" in md
-        # Memory has dagger
-        assert "†" in md
 
     def test_comparison_section_with_two_records(self):
         """Two records trigger comparison section."""
@@ -228,8 +224,8 @@ class TestFormatReportMd:
     def test_executive_summary_bottleneck(self):
         """Executive summary highlights top bottleneck."""
         steps = [
-            _step(0, "Small", wall=0.5, latency_pct=5.0, memory_pct=10.0),
-            _step(1, "BigBottleneck", wall=9.5, latency_pct=95.0, memory_pct=90.0),
+            _step(0, "Small", wall=0.5, latency_pct=5.0),
+            _step(1, "BigBottleneck", wall=9.5, latency_pct=95.0),
         ]
         rec = _record(
             "BenchWF", steps,
@@ -290,109 +286,6 @@ class TestFormatReportMd:
         assert "Slowest" in md
         assert "Least Memory" in md
         assert "Most Memory" in md
-
-    def test_memory_profile_with_overhead(self):
-        """Memory Profile section renders when steps have peak_overhead_bytes."""
-        overhead = AggregatedMetrics.from_values([2_000_000.0])
-        footprint = AggregatedMetrics.from_values([5_000_000.0])
-        steps = [
-            StepBenchmarkResult(
-                step_index=0,
-                processor_name="Loader",
-                wall_time_s=_agg(1.0),
-                cpu_time_s=_agg(0.5),
-                peak_rss_bytes=_agg(8_000_000.0),
-                gpu_used=False,
-                sample_count=1,
-                peak_overhead_bytes=overhead,
-                end_of_step_footprint_bytes=footprint,
-                latency_pct=50.0,
-                memory_pct=40.0,
-            ),
-            StepBenchmarkResult(
-                step_index=1,
-                processor_name="Processor",
-                wall_time_s=_agg(2.0),
-                cpu_time_s=_agg(1.0),
-                peak_rss_bytes=_agg(12_000_000.0),
-                gpu_used=False,
-                sample_count=1,
-                peak_overhead_bytes=AggregatedMetrics.from_values([4_000_000.0]),
-                end_of_step_footprint_bytes=None,
-                latency_pct=50.0,
-                memory_pct=60.0,
-            ),
-        ]
-        rec = _record(
-            "MemWF", steps,
-            topology=TopologyDescriptor(topology=WorkflowTopology.SEQUENTIAL),
-        )
-        md = format_report_md([rec])
-
-        assert "Memory Profile" in md
-        assert "Peak Overhead" in md
-        assert "End-of-Step Footprint" in md
-        assert "Loader" in md
-        assert "Processor" in md
-        # Step with footprint=None renders "N/A"
-        assert "N/A" in md
-        # Overall workflow peak line
-        assert "Overall Workflow Peak" in md
-
-    def test_memory_profile_concurrent_shared_annotation(self):
-        """Concurrent steps show '(concurrent)' annotation in Memory Profile."""
-        steps = [
-            StepBenchmarkResult(
-                step_index=0,
-                processor_name="BranchA",
-                wall_time_s=_agg(3.0),
-                cpu_time_s=_agg(1.5),
-                peak_rss_bytes=_agg(6_000_000.0),
-                gpu_used=False,
-                sample_count=1,
-                concurrent=True,
-                step_id="a",
-                peak_overhead_bytes=AggregatedMetrics.from_values([1_000_000.0]),
-                latency_pct=100.0,
-                memory_pct=60.0,
-            ),
-            StepBenchmarkResult(
-                step_index=1,
-                processor_name="BranchB",
-                wall_time_s=_agg(2.0),
-                cpu_time_s=_agg(1.0),
-                peak_rss_bytes=_agg(4_000_000.0),
-                gpu_used=False,
-                sample_count=1,
-                concurrent=True,
-                step_id="b",
-                peak_overhead_bytes=AggregatedMetrics.from_values([500_000.0]),
-                latency_pct=0.0,
-                memory_pct=40.0,
-            ),
-        ]
-        topo = TopologyDescriptor(
-            topology=WorkflowTopology.PARALLEL,
-            critical_path_step_ids=("a",),
-            critical_path_wall_time_s=3.0,
-            sum_of_steps_wall_time_s=5.0,
-            num_branches=2,
-        )
-        rec = _record("ConcurrentWF", steps, topology=topo, total_wall=3.0)
-        md = format_report_md([rec])
-
-        assert "Memory Profile" in md
-        assert "(concurrent)" in md
-
-    def test_memory_profile_absent_without_overhead(self):
-        """Memory Profile section is absent when no steps have overhead data."""
-        steps = [
-            _step(0, "Plain", wall=1.0, latency_pct=100.0, memory_pct=100.0),
-        ]
-        rec = _record("PlainWF", steps)
-        md = format_report_md([rec])
-
-        assert "Memory Profile" not in md
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,9 @@ executive summary, sortable AG Grid step tables, per-workflow expansion
 panels (time decomposition, branch analysis, memory profile), and an
 optional "Save to Storage" button backed by any ``BenchmarkStore``.
 
+This module is a thin presenter.  All data derivations are performed
+by ``report_engine.build_report_data()``.
+
 Dependencies
 ------------
 nicegui
@@ -26,7 +29,7 @@ Created
 
 Modified
 --------
-2026-03-18
+2026-03-19
 """
 
 # Standard library
@@ -36,64 +39,112 @@ from typing import Dict, List, Optional, Tuple, Union
 from nicegui import ui
 
 # Internal
+from grdl_te.benchmarking._formatting import (
+    fmt_bytes as _fmt_bytes,
+    fmt_throughput as _fmt_throughput,
+    fmt_time as _fmt_time,
+    short_name as _short_name,
+)
 from grdl_te.benchmarking.base import BenchmarkStore
 from grdl_te.benchmarking.models import (
     BenchmarkRecord,
     StepBenchmarkResult,
     WorkflowTopology,
 )
-from grdl_te.benchmarking.report import _build_branch_chains
-from grdl_te.benchmarking.report_md import (
-    _fmt_bytes,
-    _fmt_throughput,
-    _fmt_time,
-    _short_name,
-    _step_throughput_scalar,
-    _step_was_skipped,
+from grdl_te.benchmarking.report_engine import (
+    RecordReportData,
+    ReportData,
+    StepReportData,
+    build_report_data,
 )
 
 
 # ---------------------------------------------------------------------------
 # Data helpers
 # ---------------------------------------------------------------------------
-def _step_row_data(
-    records: List[BenchmarkRecord],
-) -> List[Dict]:
+def _step_row_data_from_engine(data: ReportData) -> List[Dict]:
     """Flatten all step results across records into AG Grid row dicts."""
     rows: List[Dict] = []
-    for record in records:
-        critical_ids = set()
-        if record.topology:
-            critical_ids = set(record.topology.critical_path_step_ids)
-
-        for step in record.step_results:
-            if _step_was_skipped(step):
+    for rd in data.records:
+        for sd in rd.steps:
+            if sd.skipped:
+                rows.append({
+                    "workflow": rd.workflow_name,
+                    "step_index": sd.step_index,
+                    "step_name": sd.short_name,
+                    "wall_mean": None,
+                    "wall_median": None,
+                    "wall_stddev": None,
+                    "wall_p95": None,
+                    "cpu_mean": None,
+                    "latency_pct": None,
+                    "on_critical_path": False,
+                    "gpu_used": False,
+                    "throughput": "--",
+                    "throughput_raw": None,
+                    "path": "skipped",
+                })
                 continue
-            step_key = step.step_id or f"__idx_{step.step_index}"
             rows.append({
-                "workflow": record.workflow_name,
-                "step_index": step.step_index,
-                "step_name": _short_name(step.processor_name),
-                "wall_mean": round(step.wall_time_s.mean, 6),
-                "wall_median": round(step.wall_time_s.median, 6),
-                "wall_stddev": round(step.wall_time_s.stddev, 6),
-                "wall_p95": round(step.wall_time_s.p95, 6),
-                "cpu_mean": round(step.cpu_time_s.mean, 6),
-                "peak_rss": _fmt_bytes(step.peak_rss_bytes.mean),
-                "peak_rss_raw": step.peak_rss_bytes.mean,
-                "latency_pct": round(step.latency_pct, 1),
-                "memory_pct": round(step.memory_pct, 1),
-                "on_critical_path": step_key in critical_ids,
-                "gpu_used": step.gpu_used,
-                "throughput": _fmt_throughput(_step_throughput_scalar(step)),
-                "throughput_raw": _step_throughput_scalar(step),
+                "workflow": rd.workflow_name,
+                "step_index": sd.step_index,
+                "step_name": sd.short_name,
+                "wall_mean": round(sd.wall_time.mean, 6),
+                "wall_median": round(sd.wall_time.median, 6),
+                "wall_stddev": round(sd.wall_time.stddev, 6),
+                "wall_p95": round(sd.wall_time.p95, 6),
+                "cpu_mean": round(sd.cpu_time.mean, 6),
+                "latency_pct": round(sd.latency_pct, 1),
+                "on_critical_path": sd.on_critical_path,
+                "gpu_used": sd.gpu_used,
+                "throughput": _fmt_throughput(sd.throughput_scalar),
+                "throughput_raw": sd.throughput_scalar,
+                "path": sd.path_classification,
             })
     return rows
 
 
-def _record_step_rows(record: BenchmarkRecord) -> List[Dict]:
+def _record_step_rows(rd: RecordReportData) -> List[Dict]:
     """Build step rows for a single record's AG Grid."""
-    return _step_row_data([record])
+    rows: List[Dict] = []
+    for sd in rd.steps:
+        if sd.skipped:
+            rows.append({
+                "step_index": sd.step_index,
+                "step_name": sd.short_name,
+                "wall_mean": None,
+                "wall_median": None,
+                "wall_stddev": None,
+                "wall_p95": None,
+                "cpu_mean": None,
+                "peak_rss": "--",
+                "peak_rss_raw": 0,
+                "latency_pct": None,
+                "on_critical_path": False,
+                "gpu_used": False,
+                "throughput": "--",
+                "throughput_raw": None,
+                "path": "skipped",
+            })
+            continue
+        rows.append({
+            "step_index": sd.step_index,
+            "step_name": sd.short_name,
+            "wall_mean": round(sd.wall_time.mean, 6),
+            "wall_median": round(sd.wall_time.median, 6),
+            "wall_stddev": round(sd.wall_time.stddev, 6),
+            "wall_p95": round(sd.wall_time.p95, 6),
+            "cpu_mean": round(sd.cpu_time.mean, 6),
+            "peak_rss": _fmt_bytes(sd.peak_rss.mean),
+            "peak_rss_raw": sd.peak_rss.mean,
+            "latency_pct": round(sd.latency_pct, 1),
+            "on_critical_path": sd.on_critical_path,
+            "gpu_used": sd.gpu_used,
+            "throughput": _fmt_throughput(sd.throughput_scalar),
+            "throughput_raw": sd.throughput_scalar,
+            "path": sd.path_classification,
+        })
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -141,13 +192,6 @@ _COMBINED_COLUMNS = [
         "valueFormatter": _TIME_FORMATTER,
     },
     {
-        "headerName": "Peak RSS", "field": "peak_rss",
-        "sortable": True, "width": 120,
-        "comparator": """function(a, b, nodeA, nodeB, isDescending) {
-            return nodeA.data.peak_rss_raw - nodeB.data.peak_rss_raw;
-        }""",
-    },
-    {
         "headerName": "Throughput", "field": "throughput",
         "sortable": True, "width": 120,
         "comparator": """function(a, b, nodeA, nodeB, isDescending) {
@@ -163,15 +207,12 @@ _COMBINED_COLUMNS = [
         "valueFormatter": _PCT_FORMATTER,
     },
     {
-        "headerName": "Memory%", "field": "memory_pct",
-        "sortable": True, "width": 100,
-        "valueFormatter": _PCT_FORMATTER,
-    },
-    {
-        "headerName": "Critical", "field": "on_critical_path",
-        "sortable": True, "width": 90,
+        "headerName": "Path", "field": "path",
+        "sortable": True, "filter": True, "width": 100,
         "cellRenderer": """function(params) {
-            return params.value ? '\\u2714' : '';
+            if (params.value === 'skipped') return '<em>skipped</em>';
+            if (params.value === 'critical') return '<strong>critical</strong>';
+            return params.value || '';
         }""",
     },
     {
@@ -192,13 +233,9 @@ _STATS_FIELDS = {"wall_median", "wall_stddev", "wall_p95"}
 def _columns_for(
     records: List[BenchmarkRecord],
     base_columns: List[Dict],
+    has_gpu: bool = False,
 ) -> List[Dict]:
-    """Filter column definitions based on iteration count.
-
-    N=1:   Strip Median, StdDev, P95 and rename "Mean Wall" → "Wall Time".
-    N≤10:  Strip P95 only (statistically meaningless with few samples).
-    N>10:  All columns shown.
-    """
+    """Filter column definitions based on iteration count and GPU presence."""
     all_single = all(r.iterations == 1 for r in records)
 
     if all_single:
@@ -211,12 +248,42 @@ def _columns_for(
             elif c["field"] == "cpu_mean":
                 c = {**c, "headerName": "CPU Time"}
             cols.append(c)
-        return cols
+    elif all(r.iterations > 10 for r in records):
+        cols = list(base_columns)
+    else:
+        cols = [c for c in base_columns if c["field"] != "wall_p95"]
 
-    if all(r.iterations > 10 for r in records):
-        return base_columns
+    if not has_gpu:
+        cols = [c for c in cols if c["field"] != "gpu_used"]
+    return cols
 
-    return [c for c in base_columns if c["field"] != "wall_p95"]
+
+def _columns_for_rd(
+    rds: List[RecordReportData],
+    base_columns: List[Dict],
+    has_gpu: bool = False,
+) -> List[Dict]:
+    """Filter column definitions using RecordReportData."""
+    all_single = all(rd.iterations == 1 for rd in rds)
+
+    if all_single:
+        cols = []
+        for c in base_columns:
+            if c["field"] in _STATS_FIELDS:
+                continue
+            if c["field"] == "wall_mean":
+                c = {**c, "headerName": "Wall Time"}
+            elif c["field"] == "cpu_mean":
+                c = {**c, "headerName": "CPU Time"}
+            cols.append(c)
+    elif all(rd.iterations > 10 for rd in rds):
+        cols = list(base_columns)
+    else:
+        cols = [c for c in base_columns if c["field"] != "wall_p95"]
+
+    if not has_gpu:
+        cols = [c for c in cols if c["field"] != "gpu_used"]
+    return cols
 
 
 # ---------------------------------------------------------------------------
@@ -232,15 +299,14 @@ def _render_metric(label: str, value: str, accent: bool = False) -> None:
         ui.label(value).classes(f"text-2xl font-mono {color_cls}")
 
 
-def _exec_summary(records: List[BenchmarkRecord]) -> None:
+def _exec_summary(data: ReportData) -> None:
     """Render the executive summary card."""
     with ui.card().classes("bg-zinc-800 w-full"):
         ui.label("Executive Summary").classes(
             "text-lg font-semibold text-slate-200 mb-2"
         )
         with ui.row().classes("gap-8 flex-wrap items-end"):
-            first = records[0]
-            hw = first.hardware
+            hw = data.hardware
 
             _render_metric("Hostname", hw.hostname)
 
@@ -255,35 +321,77 @@ def _exec_summary(records: List[BenchmarkRecord]) -> None:
             )
             _render_metric("Hardware", f"{hw.cpu_count} CPUs, {mem_str}{gpu_part}")
 
-            _render_metric("Records", str(len(records)))
+            _render_metric("Records", str(data.record_count))
 
             # Per-record context
-            if len(records) == 1:
-                r = records[0]
-                _render_metric("Iterations", str(r.iterations))
+            if data.record_count == 1:
+                rd = data.records[0]
+                rec = rd.record
+                _render_metric("Iterations", str(rd.iterations))
 
-                array_size = r.tags.get("array_size", "")
+                array_size = rec.tags.get("array_size", "")
                 if array_size:
                     _render_metric("Array Size", array_size)
 
                 _render_metric(
                     "Wall Time",
-                    _fmt_time(r.total_wall_time.mean),
+                    _fmt_time(rec.total_wall_time.mean),
                     accent=True,
                 )
-                _render_metric("CPU Time", _fmt_time(r.total_cpu_time.mean))
+                _render_metric("CPU Time", _fmt_time(rec.total_cpu_time.mean))
                 _render_metric(
-                    "Peak Memory", _fmt_bytes(r.total_peak_rss.mean)
+                    "Peak Memory", _fmt_bytes(rec.total_peak_rss.mean)
                 )
 
+        # Top bottleneck callout
+        if data.bottlenecks:
+            top = data.bottlenecks[0]
+            with ui.row().classes("w-full mt-3 items-center gap-2"):
+                ui.icon("warning", color="amber").classes("text-xl")
+                ui.html(
+                    f'<span class="text-sm text-slate-300">'
+                    f'<strong>Top Bottleneck:</strong> '
+                    f'<code class="text-cyan-400">{top.step_name}</code> '
+                    f'accounts for <strong>{top.latency_pct:.1f}%</strong> '
+                    f'of latency ({_fmt_time(top.wall_time_s)} mean wall time) '
+                    f'in <em>{top.workflow}</em>'
+                    f'</span>'
+                )
 
-def _combined_grid(records: List[BenchmarkRecord]) -> None:
+        # Bottleneck ranking table
+        if len(data.bottlenecks) > 1:
+            rows = [
+                {
+                    "rank": bn.rank,
+                    "step": bn.step_name,
+                    "latency_pct": f"{bn.latency_pct:.1f}%"
+                    if bn.latency_pct > 0
+                    else "--",
+                    "workflow": bn.workflow,
+                    "wall_time": _fmt_time(bn.wall_time_s),
+                }
+                for bn in data.bottlenecks
+            ]
+            columns = [
+                {"name": "rank", "label": "Rank", "field": "rank", "align": "left"},
+                {"name": "step", "label": "Step", "field": "step", "align": "left"},
+                {"name": "latency_pct", "label": "Latency%", "field": "latency_pct", "align": "right"},
+                {"name": "workflow", "label": "Workflow", "field": "workflow", "align": "left"},
+                {"name": "wall_time", "label": "Mean Wall", "field": "wall_time", "align": "right"},
+            ]
+            ui.table(
+                columns=columns, rows=rows,
+            ).props("dark dense flat bordered").classes("w-full mt-2")
+
+
+def _combined_grid(data: ReportData) -> None:
     """Render the combined step performance AG Grid."""
-    rows = _step_row_data(records)
+    rows = _step_row_data_from_engine(data)
+    has_gpu = any(r.get("gpu_used") for r in rows)
     ui.label("Step Performance").classes(
         "text-lg font-semibold text-slate-200 mt-4 mb-1"
     )
-    cols = _columns_for(records, _COMBINED_COLUMNS)
+    cols = _columns_for_rd(list(data.records), _COMBINED_COLUMNS, has_gpu=has_gpu)
     ui.aggrid({
         "columnDefs": cols,
         "rowData": rows,
@@ -294,12 +402,10 @@ def _combined_grid(records: List[BenchmarkRecord]) -> None:
     ).props(':theme-params=\'{"alpine-dark": true}\'')
 
 
-def _time_decomposition(record: BenchmarkRecord) -> None:
-    """Render time decomposition for parallel/mixed workflows."""
-    if not record.topology:
-        return
-    topo = record.topology
-    if topo.topology in (WorkflowTopology.COMPONENT, WorkflowTopology.SEQUENTIAL):
+def _time_decomposition(rd: RecordReportData) -> None:
+    """Render time decomposition from pre-computed data."""
+    td = rd.time_decomposition
+    if td is None:
         return
 
     ui.label("Time Decomposition").classes(
@@ -308,15 +414,15 @@ def _time_decomposition(record: BenchmarkRecord) -> None:
     rows = [
         {
             "metric": "Wall Clock (actual elapsed)",
-            "value": _fmt_time(record.total_wall_time.mean),
+            "value": _fmt_time(td.wall_clock_s),
         },
         {
             "metric": "Critical Path (longest chain)",
-            "value": _fmt_time(topo.critical_path_wall_time_s),
+            "value": _fmt_time(td.critical_path_s),
         },
         {
-            "metric": "Contended Step Sum ‡",
-            "value": _fmt_time(topo.sum_of_steps_wall_time_s),
+            "metric": "Contended Step Sum \u2021",
+            "value": _fmt_time(td.contended_step_sum_s),
         },
     ]
     columns = [
@@ -328,42 +434,32 @@ def _time_decomposition(record: BenchmarkRecord) -> None:
     )
 
 
-def _branch_analysis(record: BenchmarkRecord) -> None:
-    """Render branch analysis for multi-branch workflows."""
-    if not record.topology:
-        return
-    topo = record.topology
-    if topo.topology in (WorkflowTopology.COMPONENT, WorkflowTopology.SEQUENTIAL):
+def _branch_analysis(rd: RecordReportData) -> None:
+    """Render branch analysis from pre-computed data."""
+    branches = rd.branches
+    if len(branches) < 2:
         return
 
-    chains = _build_branch_chains(record.step_results)
-    if len(chains) < 2:
-        return
-
-    chain_times = [sum(s.wall_time_s.mean for s in c) for c in chains]
-    critical_time = max(chain_times) if chain_times else 0.0
+    critical_time = max(b.chain_time_s for b in branches)
 
     ui.label("Branch Analysis").classes(
         "text-sm font-semibold text-slate-300 mt-3"
     )
     ui.label(
-        f"{len(chains)} branches, critical path: {_fmt_time(critical_time)}"
+        f"{len(branches)} branches, critical path: {_fmt_time(critical_time)}"
     ).classes("text-xs text-slate-400 italic mb-1")
 
     rows = []
-    for i, (chain, ct) in enumerate(zip(chains, chain_times)):
-        step_names = " \u2192 ".join(
-            _short_name(s.processor_name) for s in chain
-        )
-        if ct >= critical_time - 1e-9:
+    for b in branches:
+        step_names = " \u2192 ".join(b.step_names)
+        if b.is_critical:
             status = "critical path"
         else:
-            idle = critical_time - ct
-            status = f"idle {_fmt_time(idle)}"
+            status = f"idle {_fmt_time(b.idle_time_s)}"
         rows.append({
-            "branch": i + 1,
+            "branch": b.branch_index,
             "steps": step_names,
-            "chain_time": _fmt_time(ct),
+            "chain_time": _fmt_time(b.chain_time_s),
             "status": status,
         })
 
@@ -378,94 +474,38 @@ def _branch_analysis(record: BenchmarkRecord) -> None:
     )
 
 
-def _memory_profile(record: BenchmarkRecord) -> None:
-    """Render memory profile table for steps with overhead data."""
-    active = [s for s in record.step_results if not _step_was_skipped(s)]
-    has_mem = any(
-        s.peak_overhead_bytes is not None
-        or s.end_of_step_footprint_bytes is not None
-        for s in active
-    )
-    if not has_mem:
-        return
-
-    ui.label("Memory Profile").classes(
-        "text-sm font-semibold text-slate-300 mt-3"
-    )
-
-    rows = []
-    for step in active:
-        overhead = (
-            _fmt_bytes(step.peak_overhead_bytes.mean)
-            if step.peak_overhead_bytes is not None
-            else "N/A"
-        )
-        footprint = (
-            _fmt_bytes(step.end_of_step_footprint_bytes.mean)
-            if step.end_of_step_footprint_bytes is not None
-            else "N/A"
-        )
-        mem_str = f"{step.memory_pct:.1f}%"
-        if step.concurrent:
-            mem_str += " (concurrent)"
-        rows.append({
-            "step": _short_name(step.processor_name),
-            "overhead": overhead,
-            "footprint": footprint,
-            "memory_pct": mem_str,
-        })
-
-    rows.append({
-        "step": "Overall Workflow Peak",
-        "overhead": _fmt_bytes(record.total_peak_rss.mean),
-        "footprint": "(high-water mark)",
-        "memory_pct": "",
-    })
-
-    columns = [
-        {"name": "step", "label": "Step", "field": "step", "align": "left"},
-        {"name": "overhead", "label": "Peak Overhead", "field": "overhead", "align": "right"},
-        {"name": "footprint", "label": "End-of-Step Footprint", "field": "footprint", "align": "right"},
-        {"name": "memory_pct", "label": "Memory%", "field": "memory_pct", "align": "right"},
-    ]
-    ui.table(columns=columns, rows=rows).props("dark dense flat bordered").classes(
-        "w-full"
-    )
-
-
-def _workflow_panel(record: BenchmarkRecord, index: int) -> None:
+def _workflow_panel(rd: RecordReportData, index: int) -> None:
     """Render one expansion panel for a single benchmark record."""
-    topo_label = ""
-    if record.topology:
-        topo_label = f" ({record.topology.topology.value})"
-
-    header = f"{index}. {record.workflow_name}{topo_label}"
+    topo_label = f" ({rd.topology_label})" if rd.topology_label else ""
+    header = f"{index}. {rd.workflow_name}{topo_label}"
+    rec = rd.record
 
     with ui.expansion(header, icon="assessment").props(
         "dark dense header-class='bg-zinc-700/50'"
     ).classes("w-full"):
         # Summary line
         ui.label(
-            f"Type: {record.benchmark_type}  |  "
-            f"Version: {record.workflow_version}  |  "
-            f"Iterations: {record.iterations}  |  "
-            f"Wall: {_fmt_time(record.total_wall_time.mean)}  |  "
-            f"CPU: {_fmt_time(record.total_cpu_time.mean)}  |  "
-            f"Memory: {_fmt_bytes(record.total_peak_rss.mean)}"
+            f"Type: {rd.benchmark_type}  |  "
+            f"Version: {rd.workflow_version}  |  "
+            f"Iterations: {rd.iterations}  |  "
+            f"Wall: {_fmt_time(rec.total_wall_time.mean)}  |  "
+            f"CPU: {_fmt_time(rec.total_cpu_time.mean)}  |  "
+            f"Memory: {_fmt_bytes(rec.total_peak_rss.mean)}"
         ).classes("text-sm text-slate-300 mb-2")
 
-        if record.tags:
+        if rec.tags:
             tag_str = ", ".join(
-                f"{k}={v}" for k, v in sorted(record.tags.items())
+                f"{k}={v}" for k, v in sorted(rec.tags.items())
             )
             ui.label(f"Tags: {tag_str}").classes(
                 "text-xs text-slate-400 mb-2"
             )
 
         # Per-record step grid
-        step_rows = _record_step_rows(record)
+        step_rows = _record_step_rows(rd)
         if step_rows:
-            detail_cols = _columns_for([record], _DETAIL_COLUMNS)
+            has_gpu = any(r.get("gpu_used") for r in step_rows)
+            detail_cols = _columns_for([rec], _DETAIL_COLUMNS, has_gpu=has_gpu)
             ui.aggrid({
                 "columnDefs": detail_cols,
                 "rowData": step_rows,
@@ -476,9 +516,8 @@ def _workflow_panel(record: BenchmarkRecord, index: int) -> None:
             ).props(':theme-params=\'{"alpine-dark": true}\'')
 
         # Optional sections
-        _time_decomposition(record)
-        _branch_analysis(record)
-        _memory_profile(record)
+        _time_decomposition(rd)
+        _branch_analysis(rd)
 
 
 # ---------------------------------------------------------------------------
@@ -517,27 +556,23 @@ async def _handle_save(
 # Single-report view (used for both flat and tabbed modes)
 # ---------------------------------------------------------------------------
 def _render_report_view(
-    records: List[BenchmarkRecord],
+    data: ReportData,
     store: Optional[BenchmarkStore],
 ) -> None:
-    """Render a complete report view for a list of records."""
+    """Render a complete report view from pre-computed data."""
     # Executive summary
-    _exec_summary(records)
+    _exec_summary(data)
 
     # Combined step grid
-    _combined_grid(records)
+    _combined_grid(data)
 
     # Per-workflow expansion panels
     ui.label("Workflow Details").classes(
         "text-lg font-semibold text-slate-200 mt-4 mb-1"
     )
-    sorted_records = sorted(
-        records,
-        key=lambda r: r.total_wall_time.mean,
-        reverse=True,
-    )
-    for i, record in enumerate(sorted_records, start=1):
-        _workflow_panel(record, i)
+    # Records already sorted slowest-first by engine
+    for i, rd in enumerate(data.records, start=1):
+        _workflow_panel(rd, i)
 
 
 # ---------------------------------------------------------------------------
@@ -581,7 +616,6 @@ def launch_ui(
         raise ValueError("Cannot launch dashboard with empty records list.")
 
     # Normalise input: detect grouped vs flat format.
-    # Grouped format: list of (str, list) tuples.
     groups: List[ReportGroup]
     if records and isinstance(records[0], tuple):
         groups = records  # type: ignore[assignment]
@@ -589,6 +623,11 @@ def launch_ui(
         groups = [("All Records", records)]  # type: ignore[list-item]
 
     all_records = [r for _, recs in groups for r in recs]
+
+    # Pre-compute report data for each group
+    group_data: List[Tuple[str, ReportData]] = []
+    for label, group_records in groups:
+        group_data.append((label, build_report_data(group_records)))
 
     @ui.page("/")
     def dashboard() -> None:
@@ -618,22 +657,22 @@ def launch_ui(
                         ).classes("bg-emerald-600 text-white")
 
             # Single group → render flat (no tabs)
-            if len(groups) == 1:
-                _render_report_view(groups[0][1], store)
+            if len(group_data) == 1:
+                _render_report_view(group_data[0][1], store)
             else:
                 # Multiple groups → tabbed interface
                 with ui.tabs().classes("w-full").props("dark dense") as tabs:
                     tab_objects = []
-                    for label, _ in groups:
+                    for label, _ in group_data:
                         tab_objects.append(ui.tab(label))
 
                 with ui.tab_panels(tabs).classes(
                     "w-full bg-slate-900"
                 ).props("dark"):
-                    for tab_obj, (label, group_records) in zip(
-                        tab_objects, groups
+                    for tab_obj, (label, data) in zip(
+                        tab_objects, group_data
                     ):
                         with ui.tab_panel(tab_obj):
-                            _render_report_view(group_records, store)
+                            _render_report_view(data, store)
 
     ui.run(reload=False, title="GRDL Benchmark Dashboard")

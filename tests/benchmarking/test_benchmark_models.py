@@ -362,7 +362,6 @@ class TestBenchmarkRecord:
             sum_of_steps_wall_time_s=8.0,
         )
         record.step_latency_pct = {"step_a": 60.0, "step_c": 40.0}
-        record.step_memory_pct = {"step_a": 50.0, "step_c": 50.0}
 
         restored = BenchmarkRecord.from_json(record.to_json())
 
@@ -373,7 +372,6 @@ class TestBenchmarkRecord:
         assert restored.topology.critical_path_wall_time_s == pytest.approx(4.5)
         assert restored.topology.sum_of_steps_wall_time_s == pytest.approx(8.0)
         assert restored.step_latency_pct == {"step_a": 60.0, "step_c": 40.0}
-        assert restored.step_memory_pct == {"step_a": 50.0, "step_c": 50.0}
 
     def test_topology_none_roundtrip(self):
         """Record without topology survives round-trip."""
@@ -381,10 +379,9 @@ class TestBenchmarkRecord:
         restored = BenchmarkRecord.from_json(record.to_json())
         assert restored.topology is None
         assert restored.step_latency_pct == {}
-        assert restored.step_memory_pct == {}
 
-    def test_step_latency_memory_pct_roundtrip(self):
-        """StepBenchmarkResult latency_pct and memory_pct round-trip."""
+    def test_step_latency_pct_roundtrip(self):
+        """StepBenchmarkResult latency_pct round-trip."""
         original = StepBenchmarkResult(
             step_index=0,
             processor_name="TestProc",
@@ -394,11 +391,9 @@ class TestBenchmarkRecord:
             gpu_used=False,
             sample_count=1,
             latency_pct=75.3,
-            memory_pct=42.1,
         )
         restored = StepBenchmarkResult.from_dict(original.to_dict())
         assert restored.latency_pct == pytest.approx(75.3)
-        assert restored.memory_pct == pytest.approx(42.1)
 
 
 # ---------------------------------------------------------------------------

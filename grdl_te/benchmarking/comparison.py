@@ -35,12 +35,8 @@ from typing import Any, Dict, List, Optional
 
 # Internal
 from grdl_te.benchmarking.models import BenchmarkRecord
+from grdl_te.benchmarking._formatting import short_name as _short_name
 from grdl_te.benchmarking.topology import classify_topology
-
-
-def _short_name(processor_name: str) -> str:
-    """Extract short processor name for cross-record matching."""
-    return processor_name.rsplit(".", 1)[-1]
 
 
 @dataclass
@@ -55,7 +51,7 @@ class ComparisonResult:
         The records being compared.
     bottlenecks : List[Dict[str, Any]]
         Top bottleneck steps ranked by latency and memory.
-        Each entry: ``{step_name, latency_pct, memory_pct,
+        Each entry: ``{step_name, latency_pct,
         workflow, wall_time_s}``.
     wall_time_summary : Dict[str, float]
         ``{label: total_wall_time.mean}`` for quick reference.
@@ -116,7 +112,6 @@ def compare_records(
             bottleneck_entries.append({
                 "step_name": _short_name(step.processor_name),
                 "latency_pct": step.latency_pct,
-                "memory_pct": step.memory_pct,
                 "workflow": label,
                 "wall_time_s": step.wall_time_s.mean,
             })
@@ -129,7 +124,7 @@ def compare_records(
             seen[key] = entry
     bottlenecks = sorted(
         seen.values(),
-        key=lambda e: (e["latency_pct"], e["memory_pct"]),
+        key=lambda e: e["latency_pct"],
         reverse=True,
     )
 

@@ -438,11 +438,6 @@ class StepBenchmarkResult:
         For sequential steps: ``step_wall / total_wall * 100``.
         For non-critical parallel steps: ``0.0`` (hidden by the
         critical path).  Populated by topology analysis.
-    memory_pct : float
-        Percentage contribution to workflow peak memory.  All steps
-        contribute regardless of whether they are on the critical
-        path — memory is process-wide.  Populated by topology
-        analysis.
     input_shape : tuple of int, optional
         Shape of the NumPy array that was passed as input to this
         step.  ``None`` when the input was not an ndarray.  Used
@@ -463,10 +458,7 @@ class StepBenchmarkResult:
     step_id: Optional[str] = None
     concurrent: bool = False
     depends_on: Optional[List[str]] = None
-    peak_overhead_bytes: Optional[AggregatedMetrics] = None
-    end_of_step_footprint_bytes: Optional[AggregatedMetrics] = None
     latency_pct: float = 0.0
-    memory_pct: float = 0.0
     input_shape: Optional[Tuple[int, ...]] = None
     input_dtype: Optional[str] = None
 
@@ -531,25 +523,6 @@ class StepBenchmarkResult:
 
         concurrent = any(getattr(m, 'concurrent', False) for m in metrics)
 
-        overhead_values = [
-            float(getattr(m, 'peak_overhead_bytes', 0) or 0)
-            for m in metrics
-        ]
-        footprint_values = [
-            float(getattr(m, 'end_of_step_footprint_bytes', 0) or 0)
-            for m in metrics
-        ]
-        peak_overhead = (
-            AggregatedMetrics.from_values(overhead_values)
-            if any(v > 0 for v in overhead_values)
-            else None
-        )
-        end_footprint = (
-            AggregatedMetrics.from_values(footprint_values)
-            if any(v > 0 for v in footprint_values)
-            else None
-        )
-
         # Extract input shape/dtype (consistent across iterations)
         input_shape = next(
             (tuple(s) for s in (getattr(m, 'input_shape', None) for m in metrics)
@@ -573,8 +546,6 @@ class StepBenchmarkResult:
             sample_count=len(metrics),
             step_id=step_id,
             concurrent=concurrent,
-            peak_overhead_bytes=peak_overhead,
-            end_of_step_footprint_bytes=end_footprint,
             input_shape=input_shape,
             input_dtype=input_dtype,
         )
@@ -596,7 +567,6 @@ class StepBenchmarkResult:
             "sample_count": self.sample_count,
             "concurrent": self.concurrent,
             "latency_pct": self.latency_pct,
-            "memory_pct": self.memory_pct,
         }
         if self.step_id is not None:
             d["step_id"] = self.step_id
@@ -604,10 +574,6 @@ class StepBenchmarkResult:
             d["depends_on"] = self.depends_on
         if self.gpu_memory_bytes is not None:
             d["gpu_memory_bytes"] = self.gpu_memory_bytes.to_dict()
-        if self.peak_overhead_bytes is not None:
-            d["peak_overhead_bytes"] = self.peak_overhead_bytes.to_dict()
-        if self.end_of_step_footprint_bytes is not None:
-            d["end_of_step_footprint_bytes"] = self.end_of_step_footprint_bytes.to_dict()
         if self.input_shape is not None:
             d["input_shape"] = list(self.input_shape)
         if self.input_dtype is not None:
@@ -630,14 +596,6 @@ class StepBenchmarkResult:
         if "gpu_memory_bytes" in data:
             gpu_mem = AggregatedMetrics.from_dict(data["gpu_memory_bytes"])
 
-        peak_overhead = None
-        if "peak_overhead_bytes" in data:
-            peak_overhead = AggregatedMetrics.from_dict(data["peak_overhead_bytes"])
-
-        end_footprint = None
-        if "end_of_step_footprint_bytes" in data:
-            end_footprint = AggregatedMetrics.from_dict(data["end_of_step_footprint_bytes"])
-
         return cls(
             step_index=data["step_index"],
             processor_name=data["processor_name"],
@@ -650,10 +608,7 @@ class StepBenchmarkResult:
             step_id=data.get("step_id"),
             concurrent=data.get("concurrent", False),
             depends_on=data.get("depends_on"),
-            peak_overhead_bytes=peak_overhead,
-            end_of_step_footprint_bytes=end_footprint,
             latency_pct=data.get("latency_pct", 0.0),
-            memory_pct=data.get("memory_pct", 0.0),
             input_shape=tuple(data["input_shape"]) if "input_shape" in data else None,
             input_dtype=data.get("input_dtype"),
         )
@@ -707,9 +662,9 @@ class BenchmarkRecord:
     step_latency_pct : Dict[str, float]
         Per-step latency contribution percentages, keyed by step_id
         (or ``"__idx_N"`` for linear workflows).
-    step_memory_pct : Dict[str, float]
-        Per-step memory contribution percentages, keyed by step_id
-        (or ``"__idx_N"`` for linear workflows).
+    memory_timeline : Any, optional
+        Optional memory timeline data captured during the benchmark
+        run.  ``None`` when memory timeline capture is disabled.
     """
 
     benchmark_id: str
@@ -728,7 +683,7 @@ class BenchmarkRecord:
     metadata: Dict[str, Any] = field(default_factory=dict)
     topology: Optional[TopologyDescriptor] = None
     step_latency_pct: Dict[str, float] = field(default_factory=dict)
-    step_memory_pct: Dict[str, float] = field(default_factory=dict)
+    memory_timeline: Any = None
 
     @classmethod
     def create(
@@ -824,8 +779,8 @@ class BenchmarkRecord:
             d["topology"] = self.topology.to_dict()
         if self.step_latency_pct:
             d["step_latency_pct"] = self.step_latency_pct
-        if self.step_memory_pct:
-            d["step_memory_pct"] = self.step_memory_pct
+        if self.memory_timeline is not None:
+            d["memory_timeline"] = self.memory_timeline
         return d
 
     @classmethod
@@ -877,7 +832,7 @@ class BenchmarkRecord:
             metadata=data.get("metadata", {}),
             topology=topology,
             step_latency_pct=data.get("step_latency_pct", {}),
-            step_memory_pct=data.get("step_memory_pct", {}),
+            memory_timeline=data.get("memory_timeline"),
         )
 
     def to_json(self, indent: int = 2) -> str:

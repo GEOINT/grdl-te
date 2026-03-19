@@ -43,11 +43,14 @@ from grdl_te.benchmarking.topology import (
     classify_topology,
     compute_critical_path,
     compute_latency_contributions,
-    compute_memory_contributions,
 )
 from grdl_te.benchmarking.comparison import (
     ComparisonResult,
     compare_records,
+)
+from grdl_te.benchmarking.report_engine import (
+    ReportData,
+    build_report_data,
 )
 from grdl_te.benchmarking.suite import run_suite
 from grdl_te.benchmarking.forensic import ForensicExecutionTrace, ForensicTraceReader
@@ -60,6 +63,8 @@ __all__ = [
     "BenchmarkRunner",
     "BenchmarkSource",
     "BenchmarkStore",
+    "ReportData",
+    "build_report_data",
     "ComparisonResult",
     "ComponentBenchmark",
     "ForensicExecutionTrace",
@@ -75,7 +80,6 @@ __all__ = [
     "compare_records",
     "compute_critical_path",
     "compute_latency_contributions",
-    "compute_memory_contributions",
     "format_report",
     "format_report_md",
     "launch_ui",

@@ -250,11 +250,12 @@ class TestFormatReport:
         assert "GPU Mem" not in report
 
     def test_gpu_not_shown_when_absent(self):
-        """GPU memory row absent when step has no GPU memory."""
+        """Per-step GPU tag omitted when no step uses GPU."""
         step = _make_step(gpu_used=False)
         record = _make_record(step_results=[step])
         report = format_report([record])
-        assert "GPU: No" in report
+        assert "GPU: Yes" not in report
+        assert "GPU: No" not in report
         assert "GPU Mem" not in report
 
     def test_hardware_gpu_devices(self):

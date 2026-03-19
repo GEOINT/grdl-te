@@ -125,14 +125,13 @@ def aggregate_step_metrics(
 def apply_topology_and_contributions(record: BenchmarkRecord) -> None:
     """Classify topology and populate contribution percentages in-place.
 
-    Calls :func:`classify_topology`, :func:`compute_latency_contributions`,
-    and :func:`compute_memory_contributions` from ``topology.py``, then
-    injects the per-step ``latency_pct`` and ``memory_pct`` values into
-    each ``StepBenchmarkResult``.
+    Calls :func:`classify_topology` and
+    :func:`compute_latency_contributions` from ``topology.py``, then
+    injects the per-step ``latency_pct`` values into each
+    ``StepBenchmarkResult``.
 
     Mutates ``record.topology``, ``record.step_latency_pct``,
-    ``record.step_memory_pct``, and each step result's ``latency_pct``
-    and ``memory_pct``.
+    and each step result's ``latency_pct``.
 
     Parameters
     ----------
@@ -142,14 +141,11 @@ def apply_topology_and_contributions(record: BenchmarkRecord) -> None:
     from grdl_te.benchmarking.topology import (
         classify_topology,
         compute_latency_contributions,
-        compute_memory_contributions,
     )
 
     topo = classify_topology(record)
     record.topology = topo
     record.step_latency_pct = compute_latency_contributions(record, topo)
-    record.step_memory_pct = compute_memory_contributions(record)
     for sr in record.step_results:
         key = sr.step_id or f"__idx_{sr.step_index}"
         sr.latency_pct = record.step_latency_pct.get(key, 0.0)
-        sr.memory_pct = record.step_memory_pct.get(key, 0.0)

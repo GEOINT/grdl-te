@@ -4,10 +4,10 @@ Component Benchmark — profile individual functions outside workflow context.
 
 Benchmarks a single callable (function, method, or processor) with the
 same measurement stack grdl-runtime uses (``time.perf_counter``,
-``time.process_time``, ``tracemalloc``), producing a ``BenchmarkRecord``
+``time.process_time``, ``MemorySampler``), producing a ``BenchmarkRecord``
 compatible with the rest of the benchmarking infrastructure.
 
-Does NOT require grdl-runtime — works with pure Python callables.
+Requires grdl-runtime for ``MemorySampler``.
 
 Author
 ------
@@ -29,8 +29,10 @@ Modified
 
 # Standard library
 import time
-import tracemalloc
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+# Third-party
+from grdl_rt.execution.memory_sampler import MemorySampler
 
 # Internal
 from grdl_te.benchmarking.base import BenchmarkRunner, BenchmarkStore
@@ -146,58 +148,47 @@ class ComponentBenchmark(BenchmarkRunner):
         """
         hardware = HardwareSnapshot.capture()
 
-        # Ensure tracemalloc is active
-        was_tracing = tracemalloc.is_tracing()
-        if not was_tracing:
-            tracemalloc.start()
+        # Warmup
+        for _ in range(self._warmup):
+            args, kw = self._get_args()
+            self._fn(*args, **kw)
+            if self._teardown is not None:
+                self._teardown()
 
-        try:
-            # Warmup
-            for _ in range(self._warmup):
-                args, kw = self._get_args()
-                self._fn(*args, **kw)
-                if self._teardown is not None:
-                    self._teardown()
+        # Measurement
+        wall_times: List[float] = []
+        cpu_times: List[float] = []
+        peak_rss_list: List[float] = []
+        _input_shape: Optional[tuple] = None
+        _input_dtype: Optional[str] = None
 
-            # Measurement
-            wall_times: List[float] = []
-            cpu_times: List[float] = []
-            peak_rss_list: List[float] = []
-            _input_shape: Optional[tuple] = None
-            _input_dtype: Optional[str] = None
+        for _iter_idx in range(self._iterations):
+            args, kw = self._get_args()
 
-            for _iter_idx in range(self._iterations):
-                args, kw = self._get_args()
+            # Capture input shape from the first iteration
+            if _iter_idx == 0 and args and hasattr(args[0], 'shape'):
+                _input_shape = args[0].shape
+                _input_dtype = str(args[0].dtype) if hasattr(args[0], 'dtype') else None
 
-                # Capture input shape from the first iteration
-                if _iter_idx == 0 and args and hasattr(args[0], 'shape'):
-                    _input_shape = args[0].shape
-                    _input_dtype = str(args[0].dtype) if hasattr(args[0], 'dtype') else None
+            sampler = MemorySampler()
+            sampler.start()
+            wall_t0 = time.perf_counter()
+            cpu_t0 = time.process_time()
 
-                snap_before = tracemalloc.take_snapshot()
-                wall_t0 = time.perf_counter()
-                cpu_t0 = time.process_time()
+            self._fn(*args, **kw)
 
-                self._fn(*args, **kw)
+            wall_elapsed = time.perf_counter() - wall_t0
+            cpu_elapsed = time.process_time() - cpu_t0
+            timeline = sampler.stop()
 
-                wall_elapsed = time.perf_counter() - wall_t0
-                cpu_elapsed = time.process_time() - cpu_t0
-                snap_after = tracemalloc.take_snapshot()
+            mem_delta = timeline.peak()
 
-                # Memory delta (sum of positive diffs)
-                stats = snap_after.compare_to(snap_before, "lineno")
-                mem_delta = sum(s.size_diff for s in stats if s.size_diff > 0)
+            wall_times.append(wall_elapsed)
+            cpu_times.append(cpu_elapsed)
+            peak_rss_list.append(float(mem_delta))
 
-                wall_times.append(wall_elapsed)
-                cpu_times.append(cpu_elapsed)
-                peak_rss_list.append(float(mem_delta))
-
-                if self._teardown is not None:
-                    self._teardown()
-
-        finally:
-            if not was_tracing:
-                tracemalloc.stop()
+            if self._teardown is not None:
+                self._teardown()
 
         # Build a single StepBenchmarkResult manually
         step_result = StepBenchmarkResult(
@@ -247,9 +238,7 @@ class ComponentBenchmark(BenchmarkRunner):
             sum_of_steps_wall_time_s=sum(wall_times) / len(wall_times),
         )
         step_result.latency_pct = 100.0
-        step_result.memory_pct = 100.0
         record.step_latency_pct = {self._name: 100.0}
-        record.step_memory_pct = {self._name: 100.0}
 
         if self._store is not None:
             self._store.save(record)

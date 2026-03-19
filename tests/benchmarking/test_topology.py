@@ -36,7 +36,6 @@ from grdl_te.benchmarking.topology import (
     classify_topology,
     compute_critical_path,
     compute_latency_contributions,
-    compute_memory_contributions,
 )
 
 
@@ -337,45 +336,3 @@ class TestLatencyContributions:
         topo = TopologyDescriptor(topology=WorkflowTopology.SEQUENTIAL)
         pcts = compute_latency_contributions(rec, topo)
         assert pcts == {}
-
-
-# ---------------------------------------------------------------------------
-# compute_memory_contributions
-# ---------------------------------------------------------------------------
-class TestMemoryContributions:
-    """Tests for compute_memory_contributions()."""
-
-    def test_all_steps_contribute(self):
-        """All steps contribute to memory regardless of critical path."""
-        steps = [
-            _step(0, "A", wall=5.0, mem=3000.0, step_id="a", concurrent=True),
-            _step(1, "B", wall=2.0, mem=7000.0, step_id="b", concurrent=True),
-        ]
-        rec = _record(steps, total_mem=10000.0)
-        pcts = compute_memory_contributions(rec)
-        assert pcts["a"] == pytest.approx(30.0)
-        assert pcts["b"] == pytest.approx(70.0)
-
-    def test_sequential_memory(self):
-        """Sequential steps each get proportional memory%."""
-        steps = [
-            _step(0, "A", wall=1.0, mem=2000.0),
-            _step(1, "B", wall=1.0, mem=8000.0),
-        ]
-        rec = _record(steps, total_mem=10000.0)
-        pcts = compute_memory_contributions(rec)
-        assert pcts["__idx_0"] == pytest.approx(20.0)
-        assert pcts["__idx_1"] == pytest.approx(80.0)
-
-    def test_empty_steps(self):
-        """No active steps → empty dict."""
-        rec = _record([])
-        pcts = compute_memory_contributions(rec)
-        assert pcts == {}
-
-    def test_zero_peak(self):
-        """Zero workflow peak → all steps get 0%."""
-        steps = [_step(0, "A", wall=1.0, mem=1000.0)]
-        rec = _record(steps, total_mem=0.0)
-        pcts = compute_memory_contributions(rec)
-        assert pcts["__idx_0"] == pytest.approx(0.0)

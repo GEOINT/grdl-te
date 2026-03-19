@@ -2,10 +2,15 @@
 """
 Benchmark Report Generator — comprehensive human-readable reports.
 
-Formats benchmark results into a detailed text report covering hardware
-configuration, per-benchmark statistics, per-step breakdowns, module-level
-aggregation, and overall summary.  Reports can be printed to stdout or
+Formats benchmark results into a detailed text report covering an
+executive summary with bottleneck identification, hardware configuration,
+per-benchmark statistics, per-step breakdowns with latency and memory
+contribution percentages, time decomposition, branch analysis, memory
+profile, and overall summary.  Reports can be printed to stdout or
 written to a file.
+
+This module is a thin presenter.  All data derivations are performed
+by ``report_engine.build_report_data()``.
 
 Dependencies
 ------------
@@ -26,86 +31,63 @@ Created
 
 Modified
 --------
-2026-02-18
+2026-03-19
 """
 
 # Standard library
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-# Third-party
 # Internal
+from grdl_te.benchmarking._formatting import (
+    fmt_bytes as _fmt_bytes,
+    fmt_throughput as _fmt_throughput,
+    fmt_time as _fmt_time,
+)
 from grdl_te.benchmarking.models import (
     AggregatedMetrics,
     BenchmarkRecord,
     HardwareSnapshot,
     StepBenchmarkResult,
 )
+from grdl_te.benchmarking.report_engine import (
+    RecordReportData,
+    ReportData,
+    StepReportData,
+    build_branch_chains,
+    build_report_data,
+    step_was_skipped,
+)
+
 LINE_WIDTH = 80
 RULE_CHAR = "="
 THIN_RULE_CHAR = "-"
 
 
 # ---------------------------------------------------------------------------
-# Unit formatting helpers
+# Backward-compatible wrappers (used by report_md.py / report_gui.py)
 # ---------------------------------------------------------------------------
-def _fmt_bytes(value_bytes: float) -> str:
-    """Format a byte count as a human-readable string.
+def _step_was_skipped(step: StepBenchmarkResult) -> bool:
+    """Return True if a step was skipped (all wall and CPU times are zero)."""
+    return step_was_skipped(step)
 
-    Parameters
-    ----------
-    value_bytes : float
-        Value in bytes.
 
-    Returns
-    -------
-    str
-        Formatted string with unit suffix (B, KB, MB, or GB).
+def _build_branch_chains(
+    step_results: List[StepBenchmarkResult],
+) -> List[List[StepBenchmarkResult]]:
+    """Group steps into branch chains using dependency information.
+
+    Delegates to ``report_engine.build_branch_chains``.
     """
-    abs_val = abs(value_bytes)
-    if abs_val < 1024:
-        return f"{value_bytes:.0f} B"
-    if abs_val < 1024 ** 2:
-        return f"{value_bytes / 1024:.1f} KB"
-    if abs_val < 1024 ** 3:
-        return f"{value_bytes / 1024 ** 2:.1f} MB"
-    return f"{value_bytes / 1024 ** 3:.2f} GB"
-
-
-def _fmt_time(seconds: float) -> str:
-    """Format a duration in seconds with appropriate precision.
-
-    Parameters
-    ----------
-    seconds : float
-        Duration in seconds.
-
-    Returns
-    -------
-    str
-        Formatted string with ``s`` suffix.
-    """
-    if abs(seconds) < 1.0:
-        return f"{seconds:.4f}s"
-    return f"{seconds:.2f}s"
+    return build_branch_chains(step_results)
 
 
 # ---------------------------------------------------------------------------
 # Section formatters
 # ---------------------------------------------------------------------------
 def _format_header(record_count: int) -> List[str]:
-    """Build the report header section.
-
-    Parameters
-    ----------
-    record_count : int
-        Number of benchmark records in the report.
-
-    Returns
-    -------
-    List[str]
-    """
+    """Build the report header section."""
     now = datetime.now(timezone.utc).isoformat()
     return [
         RULE_CHAR * LINE_WIDTH,
@@ -117,17 +99,7 @@ def _format_header(record_count: int) -> List[str]:
 
 
 def _format_hardware(hardware: HardwareSnapshot) -> List[str]:
-    """Build the hardware summary section.
-
-    Parameters
-    ----------
-    hardware : HardwareSnapshot
-        Hardware snapshot from the benchmark run.
-
-    Returns
-    -------
-    List[str]
-    """
+    """Build the hardware summary section."""
     mem_str = _fmt_bytes(hardware.total_memory_bytes)
     python_short = hardware.python_version.split("\n")[0]
 
@@ -155,29 +127,15 @@ def _format_hardware(hardware: HardwareSnapshot) -> List[str]:
 
 
 def _format_configuration(records: List[BenchmarkRecord]) -> List[str]:
-    """Build the run configuration section.
-
-    Parameters
-    ----------
-    records : List[BenchmarkRecord]
-        All benchmark records.
-
-    Returns
-    -------
-    List[str]
-    """
+    """Build the run configuration section."""
     first = records[0]
 
-    # Collect unique benchmark types
     types = sorted({r.benchmark_type for r in records})
 
-    # Extract array size from tags (auto-populated by runners when a source
-    # is provided).
     size_tag = first.tags.get("array_size", "")
     rows_tag = first.tags.get("rows", "?")
     cols_tag = first.tags.get("cols", "?")
 
-    # Time span
     timestamps = [r.created_at for r in records if r.created_at]
     time_start = min(timestamps) if timestamps else "N/A"
     time_end = max(timestamps) if timestamps else "N/A"
@@ -199,39 +157,95 @@ def _format_configuration(records: List[BenchmarkRecord]) -> List[str]:
     return lines
 
 
+def _format_executive_summary(data: ReportData) -> List[str]:
+    """Build the executive summary with bottleneck identification."""
+    lines = [
+        "",
+        RULE_CHAR * LINE_WIDTH,
+        f"  EXECUTIVE SUMMARY",
+        RULE_CHAR * LINE_WIDTH,
+        "",
+    ]
+
+    bns = data.bottlenecks
+    if not bns:
+        lines.append("  No bottlenecks identified.")
+        return lines
+
+    top = bns[0]
+    lines.append(
+        f"  Top Bottleneck: {top.step_name} accounts for "
+        f"{top.latency_pct:.1f}% of latency"
+        f" ({_fmt_time(top.wall_time_s)} mean wall time)"
+        f" in {top.workflow}."
+    )
+    lines.append("")
+
+    col_rank = 4
+    col_step = 24
+    col_lat = 10
+    col_wf = 20
+    col_wall = 10
+
+    lines.append(
+        f"  {'Rank':<{col_rank}}  {'Step':<{col_step}}  "
+        f"{'Latency%':>{col_lat}}  "
+        f"{'Workflow':<{col_wf}}  {'Mean Wall':>{col_wall}}"
+    )
+    lines.append(
+        f"  {THIN_RULE_CHAR * col_rank}  {THIN_RULE_CHAR * col_step}  "
+        f"{THIN_RULE_CHAR * col_lat}  "
+        f"{THIN_RULE_CHAR * col_wf}  {THIN_RULE_CHAR * col_wall}"
+    )
+
+    for bn in bns:
+        lat = "--" if bn.latency_pct == 0.0 else f"{bn.latency_pct:.1f}%"
+        step_name = bn.step_name
+        if len(step_name) > col_step:
+            step_name = step_name[:col_step - 3] + "..."
+        wf = bn.workflow
+        if len(wf) > col_wf:
+            wf = wf[:col_wf - 3] + "..."
+        lines.append(
+            f"  {bn.rank:<{col_rank}}  {step_name:<{col_step}}  "
+            f"{lat:>{col_lat}}  "
+            f"{wf:<{col_wf}}  {_fmt_time(bn.wall_time_s):>{col_wall}}"
+        )
+
+    return lines
+
+
+def _format_time_decomposition(rd: RecordReportData) -> List[str]:
+    """Build time decomposition section for parallel/mixed workflows."""
+    td = rd.time_decomposition
+    if td is None:
+        return []
+
+    indent = "     "
+    return [
+        "",
+        f"{indent}TIME DECOMPOSITION",
+        f"{indent}{THIN_RULE_CHAR * 50}",
+        f"{indent}  Wall Clock (actual elapsed):   {_fmt_time(td.wall_clock_s)}",
+        f"{indent}  Critical Path (longest chain): {_fmt_time(td.critical_path_s)}",
+        f"{indent}  Contended Step Sum:            {_fmt_time(td.contended_step_sum_s)}",
+        f"{indent}  (Step times measured under resource contention —"
+        f" not a valid sequential baseline.)",
+    ]
+
+
 def _format_metrics_table(
     wall: AggregatedMetrics,
     cpu: AggregatedMetrics,
-    mem: AggregatedMetrics,
     indent: str = "     ",
     iterations: int = 1,
 ) -> List[str]:
-    """Build an aligned statistics table for wall/cpu/memory metrics.
-
-    Parameters
-    ----------
-    wall : AggregatedMetrics
-        Wall-clock time statistics in seconds.
-    cpu : AggregatedMetrics
-        CPU time statistics in seconds.
-    mem : AggregatedMetrics
-        Memory statistics in bytes.
-    indent : str
-        Whitespace prefix for each line.
-    iterations : int
-        Number of benchmark iterations.  P95 column is only shown
-        when *iterations* > 10.
-
-    Returns
-    -------
-    List[str]
-    """
-    # N=1: scalar layout (no statistics table)
+    """Build an aligned statistics table for wall/cpu metrics."""
+    # N=1: scalar layout
     if wall.count == 1:
         return [
             f"{indent}Wall (s):    {wall.mean:.4f}",
             f"{indent}CPU  (s):    {cpu.mean:.4f}",
-            f"{indent}Mem  (KB):   {mem.mean / 1024:.1f}",
         ]
 
     show_p95 = iterations > 10
@@ -243,16 +257,15 @@ def _format_metrics_table(
         )
         sep = f"{indent}{THIN_RULE_CHAR * 78}"
 
-        def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
-                 fmt: str = ".4f") -> str:
+        def _row(label: str, m: AggregatedMetrics) -> str:
             return (
                 f"{indent}{label:<12s}  "
-                f"{m.mean / divisor:>10{fmt}}  "
-                f"{m.median / divisor:>10{fmt}}  "
-                f"{m.stddev / divisor:>10{fmt}}  "
-                f"{m.p95 / divisor:>10{fmt}}  "
-                f"{m.min / divisor:>10{fmt}}  "
-                f"{m.max / divisor:>10{fmt}}"
+                f"{m.mean:>10.4f}  "
+                f"{m.median:>10.4f}  "
+                f"{m.stddev:>10.4f}  "
+                f"{m.p95:>10.4f}  "
+                f"{m.min:>10.4f}  "
+                f"{m.max:>10.4f}"
             )
     else:
         hdr = (
@@ -261,15 +274,14 @@ def _format_metrics_table(
         )
         sep = f"{indent}{THIN_RULE_CHAR * 66}"
 
-        def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
-                 fmt: str = ".4f") -> str:
+        def _row(label: str, m: AggregatedMetrics) -> str:
             return (
                 f"{indent}{label:<12s}  "
-                f"{m.mean / divisor:>10{fmt}}  "
-                f"{m.median / divisor:>10{fmt}}  "
-                f"{m.stddev / divisor:>10{fmt}}  "
-                f"{m.min / divisor:>10{fmt}}  "
-                f"{m.max / divisor:>10{fmt}}"
+                f"{m.mean:>10.4f}  "
+                f"{m.median:>10.4f}  "
+                f"{m.stddev:>10.4f}  "
+                f"{m.min:>10.4f}  "
+                f"{m.max:>10.4f}"
             )
 
     return [
@@ -277,219 +289,82 @@ def _format_metrics_table(
         sep,
         _row("Wall (s)", wall),
         _row("CPU  (s)", cpu),
-        _row("Mem  (KB)", mem, divisor=1024.0, fmt=".1f"),
     ]
 
 
-def _format_metrics_table_partial(
-    wall: AggregatedMetrics,
-    cpu: AggregatedMetrics,
-    mem: AggregatedMetrics,
-    indent: str = "     ",
+def _format_step_detail(
+    sd: StepReportData,
     iterations: int = 1,
+    show_gpu: bool = False,
 ) -> List[str]:
-    """Build a statistics table for a concurrent step.
-
-    Wall and CPU rows are shown normally.  The memory row shows only
-    the mean value with a ``(concurrent)`` annotation because per-step
-    memory cannot be isolated when threads share a process.
-
-    Parameters
-    ----------
-    wall : AggregatedMetrics
-        Wall-clock time statistics in seconds.
-    cpu : AggregatedMetrics
-        CPU time statistics in seconds.
-    mem : AggregatedMetrics
-        Level-wide peak memory (shared across concurrent steps).
-    indent : str
-        Whitespace prefix for each line.
-    iterations : int
-        Number of benchmark iterations.  P95 column is only shown
-        when *iterations* > 10.
-
-    Returns
-    -------
-    List[str]
-    """
-    # N=1: scalar layout (no statistics table)
-    if wall.count == 1:
-        mem_str_single = _fmt_bytes(mem.mean)
-        return [
-            f"{indent}Wall (s):    {wall.mean:.4f}",
-            f"{indent}CPU  (s):    {cpu.mean:.4f}",
-            f"{indent}Mem:         {mem_str_single}  (concurrent — shared across parallel steps)",
-        ]
-
-    show_p95 = iterations > 10
-
-    if show_p95:
-        hdr = (
-            f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
-            f"{'StdDev':>10s}  {'P95':>10s}  {'Min':>10s}  {'Max':>10s}"
-        )
-        sep = f"{indent}{THIN_RULE_CHAR * 78}"
-
-        def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
-                 fmt: str = ".4f") -> str:
-            return (
-                f"{indent}{label:<12s}  "
-                f"{m.mean / divisor:>10{fmt}}  "
-                f"{m.median / divisor:>10{fmt}}  "
-                f"{m.stddev / divisor:>10{fmt}}  "
-                f"{m.p95 / divisor:>10{fmt}}  "
-                f"{m.min / divisor:>10{fmt}}  "
-                f"{m.max / divisor:>10{fmt}}"
-            )
-    else:
-        hdr = (
-            f"{indent}{'':12s}  {'Mean':>10s}  {'Median':>10s}  "
-            f"{'StdDev':>10s}  {'Min':>10s}  {'Max':>10s}"
-        )
-        sep = f"{indent}{THIN_RULE_CHAR * 66}"
-
-        def _row(label: str, m: AggregatedMetrics, divisor: float = 1.0,
-                 fmt: str = ".4f") -> str:
-            return (
-                f"{indent}{label:<12s}  "
-                f"{m.mean / divisor:>10{fmt}}  "
-                f"{m.median / divisor:>10{fmt}}  "
-                f"{m.stddev / divisor:>10{fmt}}  "
-                f"{m.min / divisor:>10{fmt}}  "
-                f"{m.max / divisor:>10{fmt}}"
-            )
-
-    mem_kb = mem.mean / 1024.0
-    if mem_kb >= 1024 * 1024:
-        mem_str = f"{mem_kb / 1024 / 1024:.2f} GB"
-    elif mem_kb >= 1024:
-        mem_str = f"{mem_kb / 1024:.1f} MB"
-    else:
-        mem_str = f"{mem_kb:.1f} KB"
-
-    return [
-        hdr,
-        sep,
-        _row("Wall (s)", wall),
-        _row("CPU  (s)", cpu),
-        f"{indent}{'Mem':12s}  {mem_str:>10s}  (concurrent — shared across parallel steps)",
+    """Build the detail block for a single workflow step."""
+    indent = "       "
+    gpu_tag = f"  GPU: {'Yes' if sd.gpu_used else 'No'}" if show_gpu else ""
+    contended_tag = "  [contended]" if sd.concurrent else ""
+    path_tag = f"  [{sd.path_classification}]"
+    lines = [
+        f"       [{sd.step_index}] {sd.processor_name}"
+        f"{contended_tag}{path_tag}{gpu_tag}",
     ]
 
+    # Latency%
+    if sd.concurrent and not sd.on_critical_path:
+        lat_str = "--"
+    else:
+        lat_str = f"{sd.latency_pct:.1f}%"
+    lines.append(f"{indent}Latency: {lat_str}")
 
-def _step_was_skipped(step: StepBenchmarkResult) -> bool:
-    """Return True if a step was skipped (all wall and CPU times are zero)."""
-    return step.wall_time_s.max == 0.0 and step.cpu_time_s.max == 0.0
-
-
-def _build_branch_chains(
-    step_results: List[StepBenchmarkResult],
-) -> List[List[StepBenchmarkResult]]:
-    """Group steps into branch chains using dependency information.
-
-    A branch chain is the path from a root step (no intra-workflow
-    parents) through all sequential descendants that have a single
-    parent.  Steps with multiple parents (merge points) terminate a
-    chain.
-
-    Returns an empty list when branch structure cannot be determined
-    (missing ``step_id`` or ``depends_on`` data).
-
-    Parameters
-    ----------
-    step_results : List[StepBenchmarkResult]
-
-    Returns
-    -------
-    List[List[StepBenchmarkResult]]
-        One list per branch, ordered from root to leaf.
-    """
-    active = [s for s in step_results if not _step_was_skipped(s)]
-    if not all(s.step_id for s in active):
-        return []
-    if not any(s.depends_on is not None for s in active):
-        return []
-
-    by_id: Dict[str, StepBenchmarkResult] = {s.step_id: s for s in active}
-
-    # Forward edges: parent → [children]
-    children: Dict[str, List[str]] = {sid: [] for sid in by_id}
-    for sid, step in by_id.items():
-        for dep in (step.depends_on or []):
-            if dep in children:
-                children[dep].append(sid)
-
-    def n_intra_parents(sid: str) -> int:
-        return sum(1 for d in (by_id[sid].depends_on or []) if d in by_id)
-
-    roots = [s for s in active if n_intra_parents(s.step_id) == 0]
-    if len(roots) < 2:
-        return []
-
-    def walk_chain(root_id: str) -> List[str]:
-        chain = [root_id]
-        current = root_id
-        while True:
-            kids = children.get(current, [])
-            if len(kids) == 1 and n_intra_parents(kids[0]) == 1:
-                chain.append(kids[0])
-                current = kids[0]
-            else:
-                break
-        return chain
-
-    return [[by_id[sid] for sid in walk_chain(r.step_id)] for r in roots]
-
-
-def _format_branch_chains(record: BenchmarkRecord) -> List[str]:
-    """Build the parallel-branch comparison block for a single record.
-
-    Emitted only when the record has concurrent steps and dependency
-    info is present to reconstruct branch chains.
-
-    Parameters
-    ----------
-    record : BenchmarkRecord
-
-    Returns
-    -------
-    List[str]
-    """
-    has_parallel = any(
-        s.concurrent for s in record.step_results if not _step_was_skipped(s)
+    lines.extend(
+        _format_metrics_table(
+            sd.wall_time, sd.cpu_time,
+            indent=indent,
+            iterations=iterations,
+        )
     )
-    if not has_parallel:
+
+    # Throughput — from pre-computed engine data
+    if sd.throughput_scalar is not None:
+        if iterations == 1:
+            lines.append(f"{indent}Throughput:  {_fmt_throughput(sd.throughput_scalar)}")
+        elif sd.throughput_stats is not None:
+            lines.append(
+                f"{indent}Throughput:  {_fmt_throughput(sd.throughput_stats.mean)} mean"
+                f"  |  {_fmt_throughput(sd.throughput_stats.min)} min"
+                f"  |  {_fmt_throughput(sd.throughput_stats.max)} max"
+            )
+
+    return lines
+
+
+def _format_branch_chains_from_data(rd: RecordReportData) -> List[str]:
+    """Build the parallel-branch comparison block from pre-computed data."""
+    branches = rd.branches
+    if len(branches) < 2:
         return []
 
-    chains = _build_branch_chains(record.step_results)
-    if len(chains) < 2:
-        return []
+    critical_time = max(b.chain_time_s for b in branches)
 
-    chain_times = [sum(s.wall_time_s.mean for s in c) for c in chains]
-    critical_time = max(chain_times)
-
-    actual_wall = record.total_wall_time.mean
-    active = [s for s in record.step_results if not _step_was_skipped(s)]
-    # Step times are measured under parallel resource contention — each
-    # individual time is inflated relative to isolated standalone execution.
-    # The contended step sum is NOT a valid sequential baseline.
-    contended_sum = sum(s.wall_time_s.mean for s in active)
+    rec = rd.record
+    active = [s for s in rd.steps if not s.skipped]
+    contended_sum = sum(s.wall_time.mean for s in active)
+    actual_wall = rec.total_wall_time.mean
 
     indent = "     "
     lines = [
         "",
-        f"{indent}PARALLEL BRANCHES ({len(chains)} branches,"
+        f"{indent}PARALLEL BRANCHES ({len(branches)} branches,"
         f" critical path: {_fmt_time(critical_time)})",
         f"{indent}{THIN_RULE_CHAR * 72}",
     ]
 
-    for i, (chain, ct) in enumerate(zip(chains, chain_times)):
-        step_names = " -> ".join(s.processor_name for s in chain)
-        if ct >= critical_time - 1e-9:
+    for b in branches:
+        step_names = " -> ".join(s.processor_name for s in b.steps)
+        if b.is_critical:
             suffix = "  [critical path *]"
         else:
-            suffix = f"  (idle {_fmt_time(critical_time - ct)})"
-        lines.append(f"{indent}  Branch {i + 1}: {step_names}")
-        lines.append(f"{indent}             chain mean: {_fmt_time(ct)}{suffix}")
+            suffix = f"  (idle {_fmt_time(b.idle_time_s)})"
+        lines.append(f"{indent}  Branch {b.branch_index}: {step_names}")
+        lines.append(f"{indent}             chain mean: {_fmt_time(b.chain_time_s)}{suffix}")
 
     lines.extend([
         "",
@@ -502,225 +377,68 @@ def _format_branch_chains(record: BenchmarkRecord) -> List[str]:
     return lines
 
 
-def _format_step_memory_table(record: BenchmarkRecord) -> List[str]:
-    """Build the Direct & Descriptive memory profile table.
-
-    Emits two columns per step: "Peak Overhead (The Spike)" and
-    "End-of-Step Footprint (Live)".  Only rendered when at least one
-    step has the new memory profile fields populated.  Old benchmark
-    records that predate these fields produce an empty list.
-
-    Parameters
-    ----------
-    record : BenchmarkRecord
-
-    Returns
-    -------
-    List[str]
-    """
-    active = [s for s in record.step_results if not _step_was_skipped(s)]
-    has_new_mem = any(
-        s.peak_overhead_bytes is not None or s.end_of_step_footprint_bytes is not None
-        for s in active
-    )
-    if not has_new_mem:
-        return []
-
-    indent = "     "
-    col_step = 24
-    col_val = 32
-
-    lines = [
-        "",
-        f"{indent}MEMORY PROFILE",
-        (
-            f"{indent}{'Step Name':<{col_step}}"
-            f"{'Peak Overhead (The Spike)':>{col_val}}"
-            f"{'End-of-Step Footprint (Live)':>{col_val}}"
-        ),
-        f"{indent}{THIN_RULE_CHAR * (col_step + col_val * 2)}",
-    ]
-
-    for step in active:
-        name = step.processor_name.rsplit(".", 1)[-1]
-        if len(name) > col_step - 2:
-            name = name[: col_step - 5] + "..."
-        overhead_str = (
-            _fmt_bytes(step.peak_overhead_bytes.mean)
-            if step.peak_overhead_bytes is not None
-            else "N/A"
-        )
-        footprint_str = (
-            _fmt_bytes(step.end_of_step_footprint_bytes.mean)
-            if step.end_of_step_footprint_bytes is not None
-            else "N/A"
-        )
-        lines.append(
-            f"{indent}{name:<{col_step}}"
-            f"{overhead_str:>{col_val}}"
-            f"{footprint_str:>{col_val}}"
-        )
-
-    overall_str = _fmt_bytes(record.total_peak_rss.mean)
-    lines.extend([
-        f"{indent}{RULE_CHAR * (col_step + col_val * 2)}",
-        (
-            f"{indent}{'Overall Workflow Peak:':<{col_step}}"
-            f"{overall_str:>{col_val}}"
-            f"{'(true high-water mark)':>{col_val}}"
-        ),
-    ])
-    return lines
-
-
-def _format_step_detail(
-    step: StepBenchmarkResult,
-    iterations: int = 1,
-) -> List[str]:
-    """Build the detail block for a single workflow step.
-
-    Parameters
-    ----------
-    step : StepBenchmarkResult
-        Per-step aggregated metrics.
-    iterations : int
-        Number of benchmark iterations (forwarded for P95 visibility).
-
-    Returns
-    -------
-    List[str]
-    """
-    indent = "       "
-    gpu_tag = f"GPU: {'Yes' if step.gpu_used else 'No'}"
-    contended_tag = "  [contended]" if step.concurrent else ""
-    lines = [
-        f"       [{step.step_index}] {step.processor_name}"
-        f"  ({gpu_tag}){contended_tag}",
-    ]
-    if step.concurrent:
-        # Concurrent steps: show wall/CPU per-step (accurate) but
-        # annotate memory as the shared level-wide peak.
-        lines.extend(
-            _format_metrics_table_partial(
-                step.wall_time_s, step.cpu_time_s, step.peak_rss_bytes,
-                indent=indent,
-                iterations=iterations,
-            )
-        )
-    else:
-        lines.extend(
-            _format_metrics_table(
-                step.wall_time_s, step.cpu_time_s, step.peak_rss_bytes,
-                indent=indent,
-                iterations=iterations,
-            )
-        )
-    # GPU memory row omitted — field not reliably tracked at runtime.
-
-    # Throughput — only when input shape is available.
-    if step.input_shape is not None:
-        from grdl_te.benchmarking.report_md import (
-            _fmt_throughput,
-            _step_throughput_scalar,
-            _step_throughput_stats,
-        )
-        if iterations == 1:
-            tp = _step_throughput_scalar(step)
-            if tp is not None:
-                lines.append(f"{indent}Throughput:  {_fmt_throughput(tp)}")
-        else:
-            tp_stats = _step_throughput_stats(step)
-            if tp_stats is not None:
-                lines.append(
-                    f"{indent}Throughput:  {_fmt_throughput(tp_stats.mean)} mean"
-                    f"  |  {_fmt_throughput(tp_stats.min)} min"
-                    f"  |  {_fmt_throughput(tp_stats.max)} max"
-                )
-
-    return lines
-
-
 def _format_record_detail(
     index: int,
-    record: BenchmarkRecord,
+    rd: RecordReportData,
 ) -> List[str]:
-    """Build the detail block for a single benchmark record.
-
-    Parameters
-    ----------
-    index : int
-        One-based display index.
-    record : BenchmarkRecord
-        The benchmark record.
-
-    Returns
-    -------
-    List[str]
-    """
+    """Build the detail block for a single benchmark record."""
+    rec = rd.record
     lines = [
         "",
-        f"  {index}. {record.workflow_name}",
-        f"     Type: {record.benchmark_type}    "
-        f"Version: {record.workflow_version}    "
-        f"Iterations: {record.iterations}",
-        f"     Wall: {_fmt_time(record.total_wall_time.mean)}    "
-        f"CPU: {_fmt_time(record.total_cpu_time.mean)}    "
-        f"Memory: {_fmt_bytes(record.total_peak_rss.mean)}",
+        f"  {index}. {rd.workflow_name} ({rd.topology_label})",
+        f"     Type: {rd.benchmark_type}    "
+        f"Version: {rd.workflow_version}    "
+        f"Iterations: {rd.iterations}",
+        f"     Wall: {_fmt_time(rec.total_wall_time.mean)}    "
+        f"CPU: {_fmt_time(rec.total_cpu_time.mean)}    "
+        f"Memory: {_fmt_bytes(rec.total_peak_rss.mean)}",
     ]
 
-    if record.tags:
-        tag_str = ", ".join(f"{k}={v}" for k, v in sorted(record.tags.items()))
+    if rec.tags:
+        tag_str = ", ".join(f"{k}={v}" for k, v in sorted(rec.tags.items()))
         lines.append(f"     Tags: {tag_str}")
 
     lines.append(f"     {THIN_RULE_CHAR * 72}")
 
-    lines.extend(_format_branch_chains(record))
-    lines.extend(_format_step_memory_table(record))
+    # Time decomposition (new — parity with MD/GUI)
+    lines.extend(_format_time_decomposition(rd))
 
-    if record.step_results:
-        ran = [s for s in record.step_results if not _step_was_skipped(s)]
-        skipped = [s for s in record.step_results if _step_was_skipped(s)]
-        parallel = [s for s in ran if s.concurrent]
+    # Branch analysis
+    lines.extend(_format_branch_chains_from_data(rd))
+
+    if rd.steps:
+        has_gpu = any(s.gpu_used for s in rd.steps if not s.skipped)
 
         lines.append("")
-        if skipped or parallel:
-            summary_parts = [f"{len(ran)} ran"]
-            if parallel:
-                summary_parts.append(f"{len(parallel)} parallel")
-            if skipped:
-                summary_parts.append(f"{len(skipped)} skipped")
+        if rd.skipped_step_count or rd.parallel_step_count:
+            summary_parts = [f"{rd.active_step_count} ran"]
+            if rd.parallel_step_count:
+                summary_parts.append(f"{rd.parallel_step_count} parallel")
+            if rd.skipped_step_count:
+                summary_parts.append(f"{rd.skipped_step_count} skipped")
             lines.append(
                 f"     Steps ({', '.join(summary_parts)}"
-                f" / {len(record.step_results)} total):"
+                f" / {len(rd.steps)} total):"
             )
         else:
             lines.append(f"     Steps:")
-        for step in record.step_results:
-            if _step_was_skipped(step):
+
+        for sd in rd.steps:
+            if sd.skipped:
                 lines.append(
-                    f"       [{step.step_index}] {step.processor_name}"
+                    f"       [{sd.step_index}] {sd.processor_name}"
                     f"  -- SKIPPED (condition not met)"
                 )
             else:
-                lines.extend(_format_step_detail(step, iterations=record.iterations))
+                lines.extend(_format_step_detail(
+                    sd, iterations=rd.iterations, show_gpu=has_gpu,
+                ))
 
     return lines
 
 
-def _format_detailed_results(
-    sorted_records: List[BenchmarkRecord],
-) -> List[str]:
-    """Build the detailed results section for all records.
-
-    Parameters
-    ----------
-    sorted_records : List[BenchmarkRecord]
-        Records sorted by wall time descending (slowest first).
-
-    Returns
-    -------
-    List[str]
-    """
+def _format_detailed_results(data: ReportData) -> List[str]:
+    """Build the detailed results section for all records."""
     lines = [
         "",
         RULE_CHAR * LINE_WIDTH,
@@ -728,24 +446,14 @@ def _format_detailed_results(
         RULE_CHAR * LINE_WIDTH,
     ]
 
-    for i, record in enumerate(sorted_records, start=1):
-        lines.extend(_format_record_detail(i, record))
+    for i, rd in enumerate(data.records, start=1):
+        lines.extend(_format_record_detail(i, rd))
 
     return lines
 
 
-def _format_comparison(records: List[BenchmarkRecord]) -> List[str]:
-    """Build the workflow comparison section for multi-record reports.
-
-    Parameters
-    ----------
-    records : List[BenchmarkRecord]
-        All benchmark records.
-
-    Returns
-    -------
-    List[str]
-    """
+def _format_comparison(data: ReportData) -> List[str]:
+    """Build the workflow comparison section for multi-record reports."""
     col_name = 34
     col_topo = 12
     col_time = 10
@@ -765,46 +473,23 @@ def _format_comparison(records: List[BenchmarkRecord]) -> List[str]:
         f"{THIN_RULE_CHAR * col_mem}  {THIN_RULE_CHAR * 5}",
     ]
 
-    sorted_records = sorted(
-        records,
-        key=lambda r: r.total_wall_time.mean,
-        reverse=True,
-    )
-
-    for rec in sorted_records:
-        topo = rec.topology.topology.value if rec.topology else "unknown"
-        active_count = sum(
-            1 for s in rec.step_results if not _step_was_skipped(s)
-        )
-        name = rec.workflow_name
+    for rd in data.records:
+        rec = rd.record
+        name = rd.workflow_name
         if len(name) > col_name:
             name = name[:col_name - 3] + "..."
         lines.append(
-            f"  {name:<{col_name}}  {topo:<{col_topo}}  "
+            f"  {name:<{col_name}}  {rd.topology_label:<{col_topo}}  "
             f"{_fmt_time(rec.total_wall_time.mean):>{col_time}}  "
             f"{_fmt_time(rec.total_cpu_time.mean):>{col_time}}  "
-            f"{_fmt_bytes(rec.total_peak_rss.mean):>{col_mem}}  {active_count}"
+            f"{_fmt_bytes(rec.total_peak_rss.mean):>{col_mem}}  {rd.active_step_count}"
         )
 
     return lines
 
 
-def _format_overall_summary(records: List[BenchmarkRecord]) -> List[str]:
-    """Build the overall summary section.
-
-    For a single record the summary shows the iteration-level spread
-    (min/max wall time and memory across iterations).  For multiple
-    records it compares across benchmarks.
-
-    Parameters
-    ----------
-    records : List[BenchmarkRecord]
-        All benchmark records.
-
-    Returns
-    -------
-    List[str]
-    """
+def _format_overall_summary(data: ReportData) -> List[str]:
+    """Build the overall summary section."""
     lines = [
         "",
         RULE_CHAR * LINE_WIDTH,
@@ -813,22 +498,23 @@ def _format_overall_summary(records: List[BenchmarkRecord]) -> List[str]:
         "",
     ]
 
-    if len(records) == 1:
-        r = records[0]
-        w = r.total_wall_time
-        c = r.total_cpu_time
-        m = r.total_peak_rss
-        if r.iterations == 1:
+    if data.record_count == 1:
+        rd = data.records[0]
+        rec = rd.record
+        w = rec.total_wall_time
+        c = rec.total_cpu_time
+        m = rec.total_peak_rss
+        if rd.iterations == 1:
             lines.extend([
-                f"  Workflow:           {r.workflow_name} v{r.workflow_version}",
+                f"  Workflow:           {rd.workflow_name} v{rd.workflow_version}",
                 f"  Wall Time:          {_fmt_time(w.mean)}",
                 f"  CPU Time:           {_fmt_time(c.mean)}",
                 f"  Peak Memory:        {_fmt_bytes(m.mean)}",
             ])
         else:
             lines.extend([
-                f"  Workflow:           {r.workflow_name} v{r.workflow_version}",
-                f"  Iterations:         {r.iterations}",
+                f"  Workflow:           {rd.workflow_name} v{rd.workflow_version}",
+                f"  Iterations:         {rd.iterations}",
                 f"  Wall Time:          {_fmt_time(w.mean)} mean"
                 f"  |  {_fmt_time(w.min)} min  |  {_fmt_time(w.max)} max"
                 f"  |  {_fmt_time(w.stddev)} stddev",
@@ -839,26 +525,20 @@ def _format_overall_summary(records: List[BenchmarkRecord]) -> List[str]:
                 f"  |  {_fmt_bytes(m.min)} min  |  {_fmt_bytes(m.max)} max",
             ])
     else:
-        wall_means = [r.total_wall_time.mean for r in records]
-        total_wall = sum(wall_means)
-
-        fastest = min(records, key=lambda r: r.total_wall_time.mean)
-        slowest = max(records, key=lambda r: r.total_wall_time.mean)
-        least_mem = min(records, key=lambda r: r.total_peak_rss.mean)
-        most_mem = max(records, key=lambda r: r.total_peak_rss.mean)
-
-        lines.extend([
-            f"  Total Benchmarks:   {len(records)}",
-            f"  Total Wall Time:    {_fmt_time(total_wall)}",
-            f"  Fastest:            {fastest.workflow_name} "
-            f"({_fmt_time(fastest.total_wall_time.mean)})",
-            f"  Slowest:            {slowest.workflow_name} "
-            f"({_fmt_time(slowest.total_wall_time.mean)})",
-            f"  Least Memory:       {least_mem.workflow_name} "
-            f"({_fmt_bytes(least_mem.total_peak_rss.mean)})",
-            f"  Most Memory:        {most_mem.workflow_name} "
-            f"({_fmt_bytes(most_mem.total_peak_rss.mean)})",
-        ])
+        s = data.overall_summary
+        if s is not None:
+            lines.extend([
+                f"  Total Benchmarks:   {s.total_benchmarks}",
+                f"  Total Wall Time:    {_fmt_time(s.total_wall_time_s)}",
+                f"  Fastest:            {s.fastest_name} "
+                f"({_fmt_time(s.fastest_wall_s)})",
+                f"  Slowest:            {s.slowest_name} "
+                f"({_fmt_time(s.slowest_wall_s)})",
+                f"  Least Memory:       {s.least_memory_name} "
+                f"({_fmt_bytes(s.least_memory_bytes)})",
+                f"  Most Memory:        {s.most_memory_name} "
+                f"({_fmt_bytes(s.most_memory_bytes)})",
+            ])
 
     lines.extend([
         "",
@@ -875,8 +555,10 @@ def format_report(records: List[BenchmarkRecord]) -> str:
     """Generate a comprehensive benchmark report as a string.
 
     Produces a human-readable text report covering hardware configuration,
-    run parameters, per-benchmark statistical breakdowns, per-step details,
-    workflow comparison (for multi-record runs), and an overall summary.
+    run parameters, executive summary with bottleneck identification,
+    per-benchmark statistical breakdowns, per-step details with latency
+    and memory percentages, time decomposition, workflow comparison
+    (for multi-record runs), and an overall summary.
 
     Parameters
     ----------
@@ -896,38 +578,30 @@ def format_report(records: List[BenchmarkRecord]) -> str:
     if not records:
         raise ValueError("Cannot generate report from empty records list.")
 
+    data = build_report_data(records)
+
     lines: List[str] = []
 
-    lines.extend(_format_header(len(records)))
-    if records[0].hardware is not None:
-        lines.extend(_format_hardware(records[0].hardware))
+    lines.extend(_format_header(data.record_count))
+    if data.hardware is not None:
+        lines.extend(_format_hardware(data.hardware))
     else:
         lines.append("Hardware:        [information missing — traces predate hardware capture]")
     lines.extend(_format_configuration(records))
 
-    # Sort by wall time descending (slowest first)
-    sorted_records = sorted(
-        records,
-        key=lambda r: r.total_wall_time.mean,
-        reverse=True,
-    )
+    # Executive summary (new — parity with MD/GUI)
+    lines.extend(_format_executive_summary(data))
 
-    lines.extend(_format_detailed_results(sorted_records))
-    if len(records) > 1:
-        lines.extend(_format_comparison(records))
-        lines.extend(_format_overall_summary(records))
+    lines.extend(_format_detailed_results(data))
+    if data.record_count > 1:
+        lines.extend(_format_comparison(data))
+        lines.extend(_format_overall_summary(data))
 
     return "\n".join(lines)
 
 
 def print_report(records: List[BenchmarkRecord]) -> None:
-    """Print a comprehensive benchmark report to stdout.
-
-    Parameters
-    ----------
-    records : List[BenchmarkRecord]
-        Benchmark records to include in the report.
-    """
+    """Print a comprehensive benchmark report to stdout."""
     print(format_report(records))
 
 
