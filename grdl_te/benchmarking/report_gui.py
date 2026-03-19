@@ -33,6 +33,8 @@ Modified
 """
 
 # Standard library
+import os
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 # Third-party
@@ -46,6 +48,7 @@ from grdl_te.benchmarking._formatting import (
     short_name as _short_name,
 )
 from grdl_te.benchmarking.base import BenchmarkStore
+from grdl_te.benchmarking.store import JSONBenchmarkStore
 from grdl_te.benchmarking.models import (
     BenchmarkRecord,
     StepBenchmarkResult,
@@ -291,21 +294,25 @@ def _columns_for_rd(
 # ---------------------------------------------------------------------------
 def _render_metric(label: str, value: str, accent: bool = False) -> None:
     """Render a single metric block (label + value)."""
-    color_cls = "text-cyan-400" if accent else "text-slate-100"
-    with ui.column().classes("gap-0"):
+    color_cls = "text-cyan-300" if accent else "text-slate-100"
+    with ui.column().classes("gap-0 min-w-0"):
         ui.label(label).classes(
-            "text-xs text-slate-400 uppercase tracking-wide"
+            "text-[11px] text-slate-500 uppercase tracking-widest font-medium"
         )
-        ui.label(value).classes(f"text-2xl font-mono {color_cls}")
+        ui.label(value).classes(
+            f"text-xl font-mono {color_cls} truncate max-w-[260px]"
+        ).props('title="' + value.replace('"', '&quot;') + '"')
 
 
 def _exec_summary(data: ReportData) -> None:
     """Render the executive summary card."""
-    with ui.card().classes("bg-zinc-800 w-full"):
+    with ui.card().classes(
+        "w-full bg-slate-800/60 shadow-lg ring-1 ring-white/5 overflow-hidden"
+    ).props("flat"):
         ui.label("Executive Summary").classes(
-            "text-lg font-semibold text-slate-200 mb-2"
+            "text-sm font-semibold text-slate-400 uppercase tracking-widest mb-3"
         )
-        with ui.row().classes("gap-8 flex-wrap items-end"):
+        with ui.row().classes("gap-8 flex-wrap items-end min-w-0"):
             hw = data.hardware
 
             _render_metric("Hostname", hw.hostname)
@@ -346,15 +353,18 @@ def _exec_summary(data: ReportData) -> None:
         # Top bottleneck callout
         if data.bottlenecks:
             top = data.bottlenecks[0]
-            with ui.row().classes("w-full mt-3 items-center gap-2"):
-                ui.icon("warning", color="amber").classes("text-xl")
+            with ui.row().classes(
+                "w-full mt-4 px-4 py-2 rounded bg-slate-700/40"
+                " items-center min-w-0 overflow-hidden"
+            ):
                 ui.html(
-                    f'<span class="text-sm text-slate-300">'
-                    f'<strong>Top Bottleneck:</strong> '
-                    f'<code class="text-cyan-400">{top.step_name}</code> '
-                    f'accounts for <strong>{top.latency_pct:.1f}%</strong> '
-                    f'of latency ({_fmt_time(top.wall_time_s)} mean wall time) '
-                    f'in <em>{top.workflow}</em>'
+                    f'<span class="text-sm text-slate-300" style="word-break:break-word">'
+                    f'<span class="text-slate-500 font-medium">Top Bottleneck</span>'
+                    f'&ensp;'
+                    f'<code class="text-cyan-300">{top.step_name}</code> '
+                    f'&mdash; {top.latency_pct:.1f}% of latency '
+                    f'({_fmt_time(top.wall_time_s)} mean wall) '
+                    f'in {top.workflow}'
                     f'</span>'
                 )
 
@@ -381,7 +391,10 @@ def _exec_summary(data: ReportData) -> None:
             ]
             ui.table(
                 columns=columns, rows=rows,
-            ).props("dark dense flat bordered").classes("w-full mt-2")
+            ).props(
+                "dark dense flat bordered hide-bottom"
+                " :rows-per-page-options=\"[0]\""
+            ).classes("w-full mt-2").style("max-height: 280px; overflow-y: auto")
 
 
 def _combined_grid(data: ReportData) -> None:
@@ -389,7 +402,7 @@ def _combined_grid(data: ReportData) -> None:
     rows = _step_row_data_from_engine(data)
     has_gpu = any(r.get("gpu_used") for r in rows)
     ui.label("Step Performance").classes(
-        "text-lg font-semibold text-slate-200 mt-4 mb-1"
+        "text-sm font-semibold text-slate-400 uppercase tracking-widest mt-6 mb-2"
     )
     cols = _columns_for_rd(list(data.records), _COMBINED_COLUMNS, has_gpu=has_gpu)
     ui.aggrid({
@@ -409,7 +422,7 @@ def _time_decomposition(rd: RecordReportData) -> None:
         return
 
     ui.label("Time Decomposition").classes(
-        "text-sm font-semibold text-slate-300 mt-3"
+        "text-xs font-semibold text-slate-500 uppercase tracking-widest mt-4"
     )
     rows = [
         {
@@ -429,9 +442,10 @@ def _time_decomposition(rd: RecordReportData) -> None:
         {"name": "metric", "label": "Metric", "field": "metric", "align": "left"},
         {"name": "value", "label": "Value", "field": "value", "align": "right"},
     ]
-    ui.table(columns=columns, rows=rows).props("dark dense flat bordered").classes(
-        "w-full max-w-lg"
-    )
+    ui.table(columns=columns, rows=rows).props(
+        "dark dense flat bordered hide-bottom"
+        " :rows-per-page-options=\"[0]\""
+    ).classes("w-full max-w-lg")
 
 
 def _branch_analysis(rd: RecordReportData) -> None:
@@ -443,7 +457,7 @@ def _branch_analysis(rd: RecordReportData) -> None:
     critical_time = max(b.chain_time_s for b in branches)
 
     ui.label("Branch Analysis").classes(
-        "text-sm font-semibold text-slate-300 mt-3"
+        "text-xs font-semibold text-slate-500 uppercase tracking-widest mt-4"
     )
     ui.label(
         f"{len(branches)} branches, critical path: {_fmt_time(critical_time)}"
@@ -469,9 +483,10 @@ def _branch_analysis(rd: RecordReportData) -> None:
         {"name": "chain_time", "label": "Chain Time", "field": "chain_time", "align": "right"},
         {"name": "status", "label": "Status", "field": "status", "align": "left"},
     ]
-    ui.table(columns=columns, rows=rows).props("dark dense flat bordered").classes(
-        "w-full"
-    )
+    ui.table(columns=columns, rows=rows).props(
+        "dark dense flat bordered hide-bottom"
+        " :rows-per-page-options=\"[0]\""
+    ).classes("w-full")
 
 
 def _workflow_panel(rd: RecordReportData, index: int) -> None:
@@ -480,9 +495,9 @@ def _workflow_panel(rd: RecordReportData, index: int) -> None:
     header = f"{index}. {rd.workflow_name}{topo_label}"
     rec = rd.record
 
-    with ui.expansion(header, icon="assessment").props(
-        "dark dense header-class='bg-zinc-700/50'"
-    ).classes("w-full"):
+    with ui.expansion(header).props(
+        "dark dense header-class='bg-slate-800/60'"
+    ).classes("w-full rounded ring-1 ring-white/5"):
         # Summary line
         ui.label(
             f"Type: {rd.benchmark_type}  |  "
@@ -491,14 +506,14 @@ def _workflow_panel(rd: RecordReportData, index: int) -> None:
             f"Wall: {_fmt_time(rec.total_wall_time.mean)}  |  "
             f"CPU: {_fmt_time(rec.total_cpu_time.mean)}  |  "
             f"Memory: {_fmt_bytes(rec.total_peak_rss.mean)}"
-        ).classes("text-sm text-slate-300 mb-2")
+        ).classes("text-sm text-slate-300 mb-2").style("word-break: break-word")
 
         if rec.tags:
             tag_str = ", ".join(
                 f"{k}={v}" for k, v in sorted(rec.tags.items())
             )
             ui.label(f"Tags: {tag_str}").classes(
-                "text-xs text-slate-400 mb-2"
+                "text-xs text-slate-400 mb-2 break-all"
             )
 
         # Per-record step grid
@@ -552,6 +567,113 @@ async def _handle_save(
     button.enable()
 
 
+def _validate_save_path(path_str: str) -> Tuple[bool, str]:
+    """Validate a directory path for saving benchmark records."""
+    if not path_str or not path_str.strip():
+        return False, "Enter a directory path"
+    try:
+        p = Path(path_str.strip()).expanduser().resolve()
+    except (ValueError, OSError):
+        return False, "Invalid path"
+    if p.is_dir():
+        if os.access(p, os.W_OK):
+            return True, f"Directory exists \u2014 {p}"
+        return False, "Permission denied"
+    # Check if parent (or nearest ancestor) is writable
+    parent = p.parent
+    while parent != parent.parent:
+        if parent.is_dir():
+            if os.access(parent, os.W_OK):
+                return True, f"Directory will be created \u2014 {p}"
+            return False, f"Permission denied on {parent}"
+        parent = parent.parent
+    return False, "Invalid path"
+
+
+def _show_save_dialog(
+    records: List[BenchmarkRecord],
+    default_dir: Optional[str] = None,
+) -> None:
+    """Open a dialog for the user to choose a save directory."""
+    default = default_dir or str(Path.cwd() / ".benchmarks")
+
+    with ui.dialog().props("persistent") as dialog, \
+            ui.card().classes(
+                "bg-slate-800 ring-1 ring-white/5 min-w-[480px]"
+            ).props("flat"):
+        ui.label("Save Benchmark Records").classes(
+            "text-sm font-semibold text-slate-400 uppercase tracking-widest"
+        )
+
+        path_input = ui.input(
+            label="Directory",
+            value=default,
+        ).classes("w-full mt-2").props("dark dense outlined color=cyan")
+
+        status_label = ui.label("").classes("text-xs mt-1")
+        count_label = ui.label(
+            f"{len(records)} record(s) will be saved."
+        ).classes("text-xs text-slate-500 mt-2")
+
+        save_btn = ui.button("Save Here", icon="save").props("flat").classes(
+            "bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/30"
+        )
+        cancel_btn = ui.button("Cancel").props("flat").classes(
+            "text-slate-400"
+        )
+
+        def _on_path_change() -> None:
+            valid, msg = _validate_save_path(path_input.value)
+            status_label.text = msg
+            if valid:
+                status_label.classes(replace="text-xs mt-1 text-emerald-400")
+            else:
+                status_label.classes(replace="text-xs mt-1 text-red-400")
+            if valid:
+                save_btn.enable()
+            else:
+                save_btn.disable()
+
+        path_input.on("update:model-value", lambda: _on_path_change())
+
+        async def _on_save() -> None:
+            p = Path(path_input.value.strip()).expanduser().resolve()
+            store = JSONBenchmarkStore(base_dir=p)
+            save_btn.disable()
+            cancel_btn.disable()
+            saved, errors = 0, []
+            for record in records:
+                try:
+                    store.save(record)
+                    saved += 1
+                except Exception as exc:
+                    errors.append(f"{record.benchmark_id[:8]}: {exc}")
+            if errors:
+                ui.notify(
+                    f"Saved {saved}/{len(records)}. "
+                    f"Errors: {'; '.join(errors)}",
+                    type="warning",
+                    position="top",
+                )
+                save_btn.enable()
+                cancel_btn.enable()
+            else:
+                ui.notify(
+                    f"All {saved} record(s) saved to {p}",
+                    type="positive",
+                    position="top",
+                )
+                dialog.close()
+
+        save_btn.on_click(_on_save)
+        cancel_btn.on_click(dialog.close)
+
+        # Run initial validation
+        _on_path_change()
+
+    dialog.open()
+
+
 # ---------------------------------------------------------------------------
 # Single-report view (used for both flat and tabbed modes)
 # ---------------------------------------------------------------------------
@@ -568,7 +690,7 @@ def _render_report_view(
 
     # Per-workflow expansion panels
     ui.label("Workflow Details").classes(
-        "text-lg font-semibold text-slate-200 mt-4 mb-1"
+        "text-sm font-semibold text-slate-400 uppercase tracking-widest mt-6 mb-2"
     )
     # Records already sorted slowest-first by engine
     for i, rd in enumerate(data.records, start=1):
@@ -604,8 +726,8 @@ def launch_ui(
         (rendered as a tabbed interface with one tab per group so that
         users can click through each report).
     store : BenchmarkStore, optional
-        Persistence backend.  When provided a "Save to Storage"
-        button is shown; otherwise it is hidden.
+        Persistence backend.  When provided, its directory is used
+        as the default path in the save dialog.
 
     Raises
     ------
@@ -632,36 +754,58 @@ def launch_ui(
     @ui.page("/")
     def dashboard() -> None:
         ui.dark_mode(True)
+        ui.add_head_html(
+            '<link rel="preconnect" href="https://fonts.googleapis.com">'
+            '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+            '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">'
+            "<style>"
+            "body { background-color: #0f172a !important; font-family: 'Inter', sans-serif; }"
+            ".q-table--dark .q-table__bottom, .q-table--dark td, .q-table--dark th,"
+            ".q-table--dark thead, .q-table--dark tr { border-color: rgba(255,255,255,0.06) !important; }"
+            ".q-tabs__content { overflow-x: auto !important; scroll-behavior: smooth; }"
+            ".q-tabs__content::-webkit-scrollbar { height: 3px; }"
+            ".q-tabs__content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }"
+            ".q-tabs__content::-webkit-scrollbar-track { background: transparent; }"
+            "</style>"
+        )
 
         with ui.column().classes(
-            "w-full max-w-7xl mx-auto p-6 bg-slate-900 min-h-screen gap-4"
+            "w-full max-w-7xl mx-auto p-6 min-h-screen gap-4"
         ):
             # Header bar
             with ui.row().classes("w-full items-center justify-between"):
                 ui.label("GRDL Benchmark Dashboard").classes(
-                    "text-2xl font-bold text-slate-100"
+                    "text-xl font-semibold text-slate-200 tracking-wide"
                 )
                 with ui.row().classes("gap-4 items-center"):
                     ui.badge(
                         f"{len(all_records)} record{'s' if len(all_records) != 1 else ''}",
-                        color="cyan",
-                    ).props("outline")
+                    ).classes(
+                        "bg-slate-700 text-slate-300"
+                    )
 
-                    if store is not None:
-                        save_btn = ui.button(
-                            "Save to Storage",
-                            icon="save",
-                            on_click=lambda: _handle_save(
-                                all_records, store, save_btn
-                            ),
-                        ).classes("bg-emerald-600 text-white")
+                    default_dir = None
+                    if store is not None and hasattr(store, '_base_dir'):
+                        default_dir = str(store._base_dir)
+
+                    ui.button(
+                        "Save to Storage",
+                        icon="save",
+                        on_click=lambda: _show_save_dialog(
+                            all_records, default_dir
+                        ),
+                    ).props("flat").classes(
+                        "bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/30"
+                    )
 
             # Single group → render flat (no tabs)
             if len(group_data) == 1:
                 _render_report_view(group_data[0][1], store)
             else:
                 # Multiple groups → tabbed interface
-                with ui.tabs().classes("w-full").props("dark dense") as tabs:
+                with ui.tabs().classes("w-full").props(
+                    "dark dense mobile-arrows outside-arrows"
+                ) as tabs:
                     tab_objects = []
                     for label, _ in group_data:
                         tab_objects.append(ui.tab(label))
