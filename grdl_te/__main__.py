@@ -31,6 +31,7 @@ Modified
 import argparse
 import sys
 from pathlib import Path
+from typing import List
 
 from grdl_te.benchmarking.suite import (
     ARRAY_SIZES,
@@ -69,6 +70,8 @@ Examples:
   python -m grdl_te --report                   # print report to terminal
   python -m grdl_te --report ./reports/        # save report to directory
   python -m grdl_te --report ./my_report.txt   # save report to file
+  python -m grdl_te --view .benchmarks/        # view saved records in GUI
+  python -m grdl_te --view rec1.json rec2.json # view specific JSON files
 """,
     )
     parser.add_argument(
@@ -103,12 +106,106 @@ Examples:
             "terminal. With a path, writes to the specified file or directory."
         ),
     )
+    parser.add_argument(
+        "--view", nargs="+", metavar="PATH",
+        help=(
+            "View saved benchmark records in the interactive GUI dashboard. "
+            "Accepts a store directory, a directory of JSON files, "
+            "or individual JSON file paths."
+        ),
+    )
+    parser.add_argument(
+        "--port", type=int, default=8080,
+        help="Port for the GUI dashboard (default: 8080). Used with --view.",
+    )
     return parser
+
+
+def _load_records(paths: List[Path]) -> List["BenchmarkRecord"]:  # noqa: F821
+    """Load benchmark records from files or directories.
+
+    Parameters
+    ----------
+    paths : list of Path
+        Each path may be a ``.json`` file, a ``JSONBenchmarkStore``
+        directory (contains a ``records/`` subdirectory), or a plain
+        directory of ``.json`` files.
+
+    Returns
+    -------
+    list of BenchmarkRecord
+        De-duplicated by ``benchmark_id``.
+    """
+    from grdl_te.benchmarking.models import BenchmarkRecord
+    from grdl_te.benchmarking.store import JSONBenchmarkStore
+
+    seen_ids: set = set()
+    records: List[BenchmarkRecord] = []
+
+    def _add(rec: BenchmarkRecord) -> None:
+        if rec.benchmark_id not in seen_ids:
+            seen_ids.add(rec.benchmark_id)
+            records.append(rec)
+
+    for p in paths:
+        p = p.expanduser().resolve()
+        if p.is_file() and p.suffix == ".json":
+            try:
+                _add(BenchmarkRecord.from_json(p.read_text()))
+            except Exception as exc:
+                print(f"Warning: could not load {p}: {exc}", file=sys.stderr)
+        elif p.is_dir():
+            if (p / "records").is_dir():
+                # Store directory
+                store = JSONBenchmarkStore(base_dir=p)
+                for rec in store.list_records(limit=10_000):
+                    _add(rec)
+            else:
+                # Loose JSON files
+                json_files = sorted(p.glob("*.json"))
+                if not json_files:
+                    print(f"Warning: no .json files in {p}", file=sys.stderr)
+                for jf in json_files:
+                    try:
+                        _add(BenchmarkRecord.from_json(jf.read_text()))
+                    except Exception as exc:
+                        print(
+                            f"Warning: could not load {jf}: {exc}",
+                            file=sys.stderr,
+                        )
+        else:
+            print(f"Warning: {p} is not a file or directory", file=sys.stderr)
+
+    return records
 
 
 def main() -> None:
     """Parse arguments and run the benchmark suite."""
     args = _build_parser().parse_args()
+
+    if args.view:
+        records = _load_records([Path(p) for p in args.view])
+        if not records:
+            print("Error: no benchmark records found.", file=sys.stderr)
+            sys.exit(1)
+        print(f"Loaded {len(records)} record(s). Launching dashboard...")
+        from collections import OrderedDict
+
+        from grdl_te.benchmarking.report_gui import launch_ui
+
+        # Group by workflow name for tabbed view
+        groups: OrderedDict[str, List] = OrderedDict()
+        for rec in records:
+            groups.setdefault(rec.workflow_name, []).append(rec)
+
+        if len(groups) > 1:
+            launch_ui(
+                [(name, recs) for name, recs in groups.items()],
+                port=args.port,
+            )
+        else:
+            launch_ui(records, port=args.port)
+        sys.exit(0)
 
     results = run_suite(
         size=args.size,

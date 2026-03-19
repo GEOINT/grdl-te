@@ -295,42 +295,61 @@ def _columns_for_rd(
 def _render_metric(label: str, value: str, accent: bool = False) -> None:
     """Render a single metric block (label + value)."""
     color_cls = "text-cyan-300" if accent else "text-slate-100"
-    with ui.column().classes("gap-0 min-w-0"):
+    with ui.column().classes("gap-0 shrink-0"):
         ui.label(label).classes(
             "text-[11px] text-slate-500 uppercase tracking-widest font-medium"
         )
         ui.label(value).classes(
-            f"text-xl font-mono {color_cls} truncate max-w-[260px]"
-        ).props('title="' + value.replace('"', '&quot;') + '"')
+            f"text-xl font-mono {color_cls} whitespace-nowrap"
+        )
 
 
 def _exec_summary(data: ReportData) -> None:
     """Render the executive summary card."""
+    hw = data.hardware
+
     with ui.card().classes(
-        "w-full bg-slate-800/60 shadow-lg ring-1 ring-white/5 overflow-hidden"
+        "w-full bg-slate-800/60 shadow-lg ring-1 ring-white/5"
     ).props("flat"):
-        ui.label("Executive Summary").classes(
+        # --- Hardware & Configuration ---
+        ui.label("Hardware & Configuration").classes(
             "text-sm font-semibold text-slate-400 uppercase tracking-widest mb-3"
         )
-        with ui.row().classes("gap-8 flex-wrap items-end min-w-0"):
-            hw = data.hardware
-
+        with ui.row().classes(
+            "gap-8 items-end flex-nowrap pb-2 w-full"
+        ).style("overflow-x: auto"):
             _render_metric("Hostname", hw.hostname)
+            _render_metric("Platform", hw.platform_info)
+            _render_metric(
+                "CPUs / Memory",
+                f"{hw.cpu_count} CPUs, {_fmt_bytes(hw.total_memory_bytes)}",
+            )
+            python_short = hw.python_version.split("\n")[0]
+            _render_metric("Python", python_short)
+
+            if hw.gpu_available:
+                for dev in hw.gpu_devices:
+                    name = dev.get("name", "Unknown")
+                    mem = dev.get("memory_bytes", 0)
+                    idx = dev.get("device_index", "?")
+                    _render_metric(f"GPU {idx}", f"{name} ({_fmt_bytes(mem)})")
+            else:
+                _render_metric("GPU", "None")
 
             if hw.captured_at:
                 _render_metric("Captured", hw.captured_at[:19])
 
-            mem_str = _fmt_bytes(hw.total_memory_bytes)
-            gpu_part = (
-                f", {len(hw.gpu_devices)} GPU(s)"
-                if hw.gpu_available
-                else ""
-            )
-            _render_metric("Hardware", f"{hw.cpu_count} CPUs, {mem_str}{gpu_part}")
+        ui.separator().classes("my-3 bg-white/5")
 
+        # --- Benchmark Results ---
+        ui.label("Results").classes(
+            "text-sm font-semibold text-slate-400 uppercase tracking-widest mb-3"
+        )
+        with ui.row().classes(
+            "gap-8 items-end flex-nowrap pb-2 w-full"
+        ).style("overflow-x: auto"):
             _render_metric("Records", str(data.record_count))
 
-            # Per-record context
             if data.record_count == 1:
                 rd = data.records[0]
                 rec = rd.record
@@ -348,6 +367,21 @@ def _exec_summary(data: ReportData) -> None:
                 _render_metric("CPU Time", _fmt_time(rec.total_cpu_time.mean))
                 _render_metric(
                     "Peak Memory", _fmt_bytes(rec.total_peak_rss.mean)
+                )
+            elif data.overall_summary is not None:
+                s = data.overall_summary
+                _render_metric(
+                    "Total Wall",
+                    _fmt_time(s.total_wall_time_s),
+                    accent=True,
+                )
+                _render_metric(
+                    "Fastest",
+                    f"{_fmt_time(s.fastest_wall_s)} ({s.fastest_name})",
+                )
+                _render_metric(
+                    "Peak Memory",
+                    _fmt_bytes(s.most_memory_bytes),
                 )
 
         # Top bottleneck callout
@@ -405,13 +439,14 @@ def _combined_grid(data: ReportData) -> None:
         "text-sm font-semibold text-slate-400 uppercase tracking-widest mt-6 mb-2"
     )
     cols = _columns_for_rd(list(data.records), _COMBINED_COLUMNS, has_gpu=has_gpu)
+    row_count = len(rows)
+    grid_height = min(max(row_count * 42 + 48, 150), 500)
     ui.aggrid({
         "columnDefs": cols,
         "rowData": rows,
         "defaultColDef": {"resizable": True},
-        "domLayout": "autoHeight" if len(rows) <= 20 else "normal",
     }).classes("w-full").style(
-        "height: 400px" if len(rows) > 20 else ""
+        f"height: {grid_height}px"
     ).props(':theme-params=\'{"alpine-dark": true}\'')
 
 
@@ -521,13 +556,13 @@ def _workflow_panel(rd: RecordReportData, index: int) -> None:
         if step_rows:
             has_gpu = any(r.get("gpu_used") for r in step_rows)
             detail_cols = _columns_for([rec], _DETAIL_COLUMNS, has_gpu=has_gpu)
+            detail_height = min(max(len(step_rows) * 42 + 48, 150), 400)
             ui.aggrid({
                 "columnDefs": detail_cols,
                 "rowData": step_rows,
                 "defaultColDef": {"resizable": True},
-                "domLayout": "autoHeight" if len(step_rows) <= 15 else "normal",
             }).classes("w-full").style(
-                "height: 300px" if len(step_rows) > 15 else ""
+                f"height: {detail_height}px"
             ).props(':theme-params=\'{"alpine-dark": true}\'')
 
         # Optional sections
@@ -708,6 +743,7 @@ ReportGroup = Tuple[str, List[BenchmarkRecord]]
 def launch_ui(
     records: Union[List[BenchmarkRecord], List[ReportGroup]],
     store: Optional[BenchmarkStore] = None,
+    port: int = 8080,
 ) -> None:
     """Launch an interactive NiceGUI benchmark dashboard.
 
@@ -728,6 +764,8 @@ def launch_ui(
     store : BenchmarkStore, optional
         Persistence backend.  When provided, its directory is used
         as the default path in the save dialog.
+    port : int
+        Port for the web server.  Default ``8080``.
 
     Raises
     ------
@@ -766,6 +804,9 @@ def launch_ui(
             ".q-tabs__content::-webkit-scrollbar { height: 3px; }"
             ".q-tabs__content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }"
             ".q-tabs__content::-webkit-scrollbar-track { background: transparent; }"
+            ".q-card ::-webkit-scrollbar { height: 3px; }"
+            ".q-card ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }"
+            ".q-card ::-webkit-scrollbar-track { background: transparent; }"
             "</style>"
         )
 
@@ -819,4 +860,4 @@ def launch_ui(
                         with ui.tab_panel(tab_obj):
                             _render_report_view(data, store)
 
-    ui.run(reload=False, title="GRDL Benchmark Dashboard")
+    ui.run(reload=False, title="GRDL Benchmark Dashboard", port=port)
