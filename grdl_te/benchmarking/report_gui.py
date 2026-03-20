@@ -55,6 +55,8 @@ from grdl_te.benchmarking.models import (
     WorkflowTopology,
 )
 from grdl_te.benchmarking.report_engine import (
+    IterationMemoryProfile,
+    MemoryProfileData,
     RecordReportData,
     ReportData,
     StepReportData,
@@ -524,6 +526,154 @@ def _branch_analysis(rd: RecordReportData) -> None:
     ).classes("w-full")
 
 
+# ---------------------------------------------------------------------------
+# Memory timeline chart
+# ---------------------------------------------------------------------------
+_STEP_COLORS = [
+    "#22d3ee",  # cyan
+    "#fbbf24",  # amber
+    "#a78bfa",  # violet
+    "#34d399",  # emerald
+    "#fb7185",  # rose
+    "#60a5fa",  # blue
+    "#fdba74",  # orange
+]
+
+
+def _build_memory_figure(
+    iteration: IterationMemoryProfile,
+    fmt_bytes_fn,
+) -> "go.Figure":
+    """Build a Plotly figure with memory line + step Gantt subplots."""
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    step_count = len(iteration.step_spans)
+    gantt_ratio = max(0.2, min(0.45, step_count * 0.08))
+    mem_ratio = 1.0 - gantt_ratio
+
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        row_heights=[mem_ratio, gantt_ratio],
+        subplot_titles=("Memory Usage", "Step Execution"),
+    )
+
+    # --- Top subplot: memory line ---
+    times = [p.time_s for p in iteration.timeline]
+    mem_values = [p.memory_bytes for p in iteration.timeline]
+    mem_labels = [fmt_bytes_fn(v) for v in mem_values]
+
+    fig.add_trace(
+        go.Scatter(
+            x=times,
+            y=mem_values,
+            mode="lines",
+            name="Memory",
+            line=dict(color="#22d3ee", width=2),
+            fill="tozeroy",
+            fillcolor="rgba(34, 211, 238, 0.1)",
+            customdata=mem_labels,
+            hovertemplate=(
+                "Time: %{x:.4f}s<br>Memory: %{customdata}<extra></extra>"
+            ),
+        ),
+        row=1, col=1,
+    )
+
+    # --- Bottom subplot: step Gantt bars ---
+    color_map: dict = {}
+    color_idx = 0
+    for span in iteration.step_spans:
+        if span.step_name not in color_map:
+            color_map[span.step_name] = _STEP_COLORS[
+                color_idx % len(_STEP_COLORS)
+            ]
+            color_idx += 1
+
+        duration = span.end_s - span.start_s
+        fig.add_trace(
+            go.Bar(
+                x=[duration],
+                y=[span.step_name],
+                base=[span.start_s],
+                orientation="h",
+                name=span.step_name,
+                marker_color=color_map[span.step_name],
+                showlegend=False,
+                hovertemplate=(
+                    f"<b>{span.step_name}</b><br>"
+                    f"Start: %{{base:.4f}}s<br>"
+                    f"Duration: %{{x:.4f}}s<extra></extra>"
+                ),
+            ),
+            row=2, col=1,
+        )
+
+    # --- Layout ---
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(15,23,42,0.6)",
+        font=dict(family="Inter, sans-serif", color="#cbd5e1", size=11),
+        height=300 + step_count * 28,
+        margin=dict(l=10, r=20, t=30, b=40),
+        showlegend=False,
+        barmode="overlay",
+    )
+
+    fig.update_yaxes(title_text="Bytes", row=1, col=1)
+    fig.update_yaxes(
+        autorange="reversed",
+        row=2, col=1,
+    )
+    fig.update_xaxes(title_text="Time (s)", row=2, col=1)
+
+    # Style subplot titles
+    for ann in fig.layout.annotations:
+        ann.font = dict(size=11, color="#94a3b8")
+
+    return fig
+
+
+def _memory_timeline_chart(rd: RecordReportData) -> None:
+    """Render memory timeline chart with step Gantt overlay."""
+    mp = rd.memory_profile
+    if not mp.has_data:
+        return
+
+    ui.label("Memory Timeline").classes(
+        "text-xs font-semibold text-slate-500 uppercase tracking-widest mt-4"
+    )
+
+    if len(mp.iterations) == 1:
+        fig = _build_memory_figure(mp.iterations[0], _fmt_bytes)
+        ui.plotly(fig).classes("w-full")
+    else:
+        options = {
+            i: f"Iteration {i + 1}"
+            for i in range(len(mp.iterations))
+        }
+        fig = _build_memory_figure(mp.iterations[0], _fmt_bytes)
+        chart_container = ui.column().classes("w-full")
+
+        with ui.row().classes("items-center gap-2 mb-1"):
+            sel = ui.select(
+                options, value=0, label="Iteration",
+            ).props("dark dense outlined color=cyan").classes("w-40")
+
+        with chart_container:
+            plot_el = ui.plotly(fig).classes("w-full")
+
+        def _on_iter_change(e) -> None:
+            idx = e.value if hasattr(e, "value") else e
+            new_fig = _build_memory_figure(mp.iterations[idx], _fmt_bytes)
+            plot_el.update_figure(new_fig)
+
+        sel.on_value_change(_on_iter_change)
+
+
 def _workflow_panel(rd: RecordReportData, index: int) -> None:
     """Render one expansion panel for a single benchmark record."""
     topo_label = f" ({rd.topology_label})" if rd.topology_label else ""
@@ -568,6 +718,7 @@ def _workflow_panel(rd: RecordReportData, index: int) -> None:
         # Optional sections
         _time_decomposition(rd)
         _branch_analysis(rd)
+        _memory_timeline_chart(rd)
 
 
 # ---------------------------------------------------------------------------

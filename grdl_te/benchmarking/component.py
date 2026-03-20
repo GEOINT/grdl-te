@@ -159,6 +159,7 @@ class ComponentBenchmark(BenchmarkRunner):
         wall_times: List[float] = []
         cpu_times: List[float] = []
         peak_rss_list: List[float] = []
+        raw_metrics: List[Dict[str, Any]] = []
         _input_shape: Optional[tuple] = None
         _input_dtype: Optional[str] = None
 
@@ -177,8 +178,10 @@ class ComponentBenchmark(BenchmarkRunner):
 
             self._fn(*args, **kw)
 
-            wall_elapsed = time.perf_counter() - wall_t0
-            cpu_elapsed = time.process_time() - cpu_t0
+            wall_end = time.perf_counter()
+            cpu_end = time.process_time()
+            wall_elapsed = wall_end - wall_t0
+            cpu_elapsed = cpu_end - cpu_t0
             timeline = sampler.stop()
 
             mem_delta = timeline.peak()
@@ -186,6 +189,16 @@ class ComponentBenchmark(BenchmarkRunner):
             wall_times.append(wall_elapsed)
             cpu_times.append(cpu_elapsed)
             peak_rss_list.append(float(mem_delta))
+
+            raw_metrics.append({
+                "memory_timeline": timeline.to_dict(),
+                "step_metrics": [{
+                    "processor_name": self._name,
+                    "wall_start": wall_t0,
+                    "wall_end": wall_end,
+                    "concurrent": False,
+                }],
+            })
 
             if self._teardown is not None:
                 self._teardown()
@@ -224,7 +237,7 @@ class ComponentBenchmark(BenchmarkRunner):
             total_cpu_time=AggregatedMetrics.from_values(cpu_times),
             total_peak_rss=AggregatedMetrics.from_values(peak_rss_list),
             step_results=[step_result],
-            raw_metrics=[],
+            raw_metrics=raw_metrics,
             tags=merged_tags,
         )
 

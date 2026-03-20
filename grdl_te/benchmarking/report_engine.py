@@ -139,6 +139,49 @@ def build_branch_chains(
 
 
 # ---------------------------------------------------------------------------
+# Memory profile data structures
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class MemoryTimelinePoint:
+    """A single memory sample, time-normalized relative to iteration start."""
+
+    time_s: float
+    memory_bytes: int
+
+
+@dataclass(frozen=True)
+class StepTimeSpan:
+    """A step's wall-clock span, time-normalized relative to iteration start."""
+
+    step_name: str
+    step_id: Optional[str]
+    start_s: float
+    end_s: float
+    concurrent: bool
+    lane: int
+
+
+@dataclass(frozen=True)
+class IterationMemoryProfile:
+    """Complete memory + step timeline for one iteration."""
+
+    iteration_index: int
+    timeline: Tuple[MemoryTimelinePoint, ...]
+    step_spans: Tuple[StepTimeSpan, ...]
+    duration_s: float
+    peak_memory_bytes: int
+
+
+@dataclass(frozen=True)
+class MemoryProfileData:
+    """All iteration memory profiles for one BenchmarkRecord."""
+
+    iterations: Tuple[IterationMemoryProfile, ...]
+    has_data: bool
+    peak_memory_bytes: int
+
+
+# ---------------------------------------------------------------------------
 # Report data structures
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
@@ -233,6 +276,7 @@ class RecordReportData:
     parallel_step_count: int
     branches: Tuple[BranchReportData, ...]
     time_decomposition: Optional[TimeDecomposition]
+    memory_profile: MemoryProfileData
 
 
 @dataclass(frozen=True)
@@ -330,6 +374,105 @@ def _build_branches(
         ))
 
     return tuple(branches)
+
+
+def _assign_lanes(
+    spans: List[StepTimeSpan],
+) -> List[StepTimeSpan]:
+    """Assign Gantt lanes to step spans using greedy interval scheduling.
+
+    Sorts spans by start time and assigns each to the lowest lane
+    where it does not overlap with any previously assigned span.
+    """
+    from dataclasses import replace
+
+    sorted_spans = sorted(spans, key=lambda s: s.start_s)
+    lane_ends: List[float] = []
+    result: List[StepTimeSpan] = []
+    for span in sorted_spans:
+        assigned = False
+        for i, end in enumerate(lane_ends):
+            if span.start_s >= end:
+                lane_ends[i] = span.end_s
+                result.append(replace(span, lane=i))
+                assigned = True
+                break
+        if not assigned:
+            result.append(replace(span, lane=len(lane_ends)))
+            lane_ends.append(span.end_s)
+    return result
+
+
+def _build_memory_profile(
+    record: BenchmarkRecord,
+) -> MemoryProfileData:
+    """Build memory profile data from raw_metrics.
+
+    Extracts memory timeline samples and step wall-clock spans from
+    each iteration's raw metrics, normalizing all timestamps relative
+    to the memory timeline's ``t0``.
+    """
+    if not record.raw_metrics:
+        return MemoryProfileData(
+            iterations=(), has_data=False, peak_memory_bytes=0,
+        )
+
+    profiles: List[IterationMemoryProfile] = []
+    global_peak = 0
+
+    for idx, rm in enumerate(record.raw_metrics):
+        mt = rm.get("memory_timeline")
+        if mt is None:
+            continue
+        t0 = mt.get("t0", 0.0)
+        timestamps = mt.get("timestamps", [])
+        values = mt.get("values", [])
+        if not timestamps or not values:
+            continue
+
+        timeline = tuple(
+            MemoryTimelinePoint(time_s=t, memory_bytes=v)
+            for t, v in zip(timestamps, values)
+        )
+        peak = max(values)
+        if peak > global_peak:
+            global_peak = peak
+
+        # Build step spans from step_metrics
+        raw_spans: List[StepTimeSpan] = []
+        for sm in rm.get("step_metrics", []):
+            ws = sm.get("wall_start")
+            we = sm.get("wall_end")
+            if ws is None or we is None:
+                continue
+            raw_spans.append(StepTimeSpan(
+                step_name=short_name(sm.get("processor_name", "")),
+                step_id=sm.get("step_id"),
+                start_s=ws - t0,
+                end_s=we - t0,
+                concurrent=sm.get("concurrent", False),
+                lane=0,
+            ))
+
+        step_spans = tuple(_assign_lanes(raw_spans))
+        duration = max(
+            (timestamps[-1] if timestamps else 0.0),
+            max((s.end_s for s in step_spans), default=0.0),
+        )
+
+        profiles.append(IterationMemoryProfile(
+            iteration_index=idx,
+            timeline=timeline,
+            step_spans=step_spans,
+            duration_s=duration,
+            peak_memory_bytes=peak,
+        ))
+
+    return MemoryProfileData(
+        iterations=tuple(profiles),
+        has_data=len(profiles) > 0,
+        peak_memory_bytes=global_peak,
+    )
 
 
 def _build_time_decomposition(
@@ -446,6 +589,7 @@ def _build_record_report(record: BenchmarkRecord) -> RecordReportData:
         parallel_step_count=len(parallel),
         branches=_build_branches(record),
         time_decomposition=_build_time_decomposition(record),
+        memory_profile=_build_memory_profile(record),
     )
 
 
