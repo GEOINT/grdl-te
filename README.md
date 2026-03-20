@@ -67,7 +67,7 @@ pip install -e ".[dev]"
 
 ## Validation Suite
 
-Three-level validation against real-world satellite data (552 tests, 38 test files):
+Three-level validation against real-world satellite data (~700+ tests, 51 test files):
 
 | Level | Scope | Examples |
 |-------|-------|---------|
@@ -91,6 +91,10 @@ pytest
 pytest tests/validation/test_io_geotiff.py -v        # Landsat
 pytest tests/validation/test_io_nitf.py -v            # Umbra SICD
 pytest tests/validation/test_io_sentinel1.py -v       # Sentinel-1
+pytest tests/validation/test_io_nisar.py -v            # NISAR
+pytest tests/validation/test_io_eo_nitf.py -v          # EO NITF (RPC/RSM)
+pytest tests/validation/test_io_sicd.py -v             # Dedicated SICD
+pytest tests/validation/test_io_viirs.py -v            # Dedicated VIIRS
 
 # Geolocation tests
 pytest tests/validation/test_geolocation_base.py tests/validation/test_geolocation_utils.py -v
@@ -99,7 +103,9 @@ pytest tests/validation/test_geolocation_affine_real.py -v
 # Processing tests
 pytest tests/validation/test_detection_cfar.py -v
 pytest tests/validation/test_decomposition_halpha.py -v
+pytest tests/validation/test_decomposition_pauli.py -v
 pytest tests/validation/test_sar_image_formation.py -v
+pytest tests/validation/test_sar_sublook_dominance.py -v
 
 # Benchmarking infrastructure tests
 pytest tests/benchmarking/ -v
@@ -135,6 +141,11 @@ pytest -m "not requires_data"
 | `aster` | ASTER L1T tests |
 | `biomass` | BIOMASS L1 tests |
 | `terrasar` | TerraSAR-X/TanDEM-X tests |
+| `nisar` | NISAR HDF5 SAR tests (NISARReader) |
+| `eo_nitf` | EO NITF with RPC/RSM tests (EONITFReader) |
+| `sicd` | Dedicated SICDReader tests |
+| `writers` | IO writer roundtrip tests |
+| `transforms` | Detection geometry transform tests |
 | `geolocation` | Geolocation utility and coordinate transform tests |
 | `elevation` | Elevation model tests |
 | `requires_data` | Test requires real data files in `data/` |
@@ -296,7 +307,7 @@ All public GRDL components have both a dedicated benchmark in `suite.py` and a c
 |--------|-------|
 | Benchmarked components | 78/78 |
 | Benchmark groups | 13 |
-| Validation test files | 32 |
+| Validation test files | 51 |
 | Benchmark infrastructure tests | 6 |
 | YAML workflow steps | 28 |
 | Array size presets | small (512), medium (2048), large (4096) |

@@ -16,6 +16,22 @@ GRDL-TE is a **dependency consumer** of GRDL. It imports and exercises GRDL's pu
 | `grdl.IO.HDF5Reader` | VIIRS VNP09GA granules |
 | `grdl.IO.JP2Reader` | Sentinel-2 L2A JPEG2000 |
 | `grdl.IO.NITFReader` | Umbra SICD complex SAR |
+| `grdl.IO.sar.SICDReader` | Dedicated SICD metadata (35 nested dataclasses) |
+| `grdl.IO.sar.NISARReader` | NISAR RSLC/GSLC HDF5 |
+| `grdl.IO.eo.EONITFReader` | EO NITF with RPC/RSM geolocation |
+| `grdl.IO.multispectral.VIIRSReader` | Dedicated VIIRS multispectral |
+| `grdl.IO.GeoTIFFWriter` | GeoTIFF write roundtrip |
+| `grdl.IO.HDF5Writer` | HDF5 write roundtrip |
+| `grdl.IO.get_writer` / `write` | Writer factory and auto-detect |
+| `grdl.image_processing.decomposition.PauliDecomposition` | Quad-pol Pauli basis |
+| `grdl.image_processing.sar.SublookDecomposition` | Sub-aperture decomposition |
+| `grdl.image_processing.sar.dominance` | Dominance and entropy features |
+| `grdl.geolocation.eo.RPCGeolocation` | RPC ground/image transforms |
+| `grdl.geolocation.sar.SICDGeolocation` | SICD coordinate transforms |
+| `grdl.geolocation.sar.NISARGeolocation` | NISAR coordinate transforms |
+| `grdl.coregistration.AffineCoRegistration` | Affine image alignment |
+| `grdl.coregistration.FeatureMatchCoRegistration` | Feature-based alignment |
+| `grdl.transforms.detection` | Detection geometry transforms |
 | `grdl.data_prep.ChipExtractor` | Region extraction integration |
 | `grdl.data_prep.Normalizer` | Normalization integration |
 | `grdl.data_prep.Tiler` | Tile grid integration |

@@ -78,6 +78,11 @@ markers = [
     "pipeline: Pipeline composition tests",
     "data_prep: Data preparation tests (ChipExtractor, Tiler, Normalizer)",
     "gpu: GPU (CuPy) device verification tests",
+    "nisar: NISAR HDF5 SAR tests (NISARReader)",
+    "eo_nitf: EO NITF with RPC/RSM tests (EONITFReader)",
+    "sicd: Dedicated SICDReader tests",
+    "writers: IO writer roundtrip tests",
+    "transforms: Detection geometry transform tests",
 ]
 
 [tool.setuptools.packages.find]

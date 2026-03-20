@@ -128,6 +128,18 @@ def terrasar_data_dir(data_dir):
     return data_dir / "terrasar"
 
 
+@pytest.fixture(scope="session")
+def nisar_data_dir(data_dir):
+    """NISAR HDF5 SAR data directory."""
+    return data_dir / "nisar"
+
+
+@pytest.fixture(scope="session")
+def eo_nitf_data_dir(data_dir):
+    """EO NITF (RPC/RSM) data directory."""
+    return data_dir / "eo_nitf"
+
+
 def find_data_file(directory: Path, pattern: str) -> Optional[Path]:
     """
     Find first file matching pattern in directory.
@@ -334,6 +346,28 @@ def require_dem_file(dem_data_dir):
 def require_geoid_file(geoid_data_dir):
     """EGM96 geoid model file."""
     return require_data_file(geoid_data_dir, "*.pgm")
+
+
+@pytest.fixture
+def require_nisar_file(nisar_data_dir):
+    """NISAR RSLC/GSLC HDF5 file."""
+    return require_data_file(nisar_data_dir, "NISAR*.h5")
+
+
+@pytest.fixture
+def require_eo_nitf_file(eo_nitf_data_dir):
+    """EO NITF file with RPC/RSM geolocation."""
+    result = find_data_file(eo_nitf_data_dir, "*.ntf")
+    if result is None:
+        result = find_data_file(eo_nitf_data_dir, "*.nitf")
+    if result is None:
+        readme_path = eo_nitf_data_dir / "README.md"
+        msg = (
+            f"Data file '*.ntf or *.nitf' not found in {eo_nitf_data_dir}. "
+            f"Download instructions: {readme_path if readme_path.exists() else 'see data/ folder'}"
+        )
+        pytest.skip(msg)
+    return result
 
 
 @pytest.fixture

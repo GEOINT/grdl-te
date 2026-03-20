@@ -33,6 +33,13 @@ except ImportError:
     _HAS_CPHD = False
 
 
+try:
+    from grdl.data_prep import ChipExtractor, Normalizer
+    _HAS_DATA_PREP = True
+except ImportError:
+    _HAS_DATA_PREP = False
+
+
 pytestmark = [
     pytest.mark.cphd,
     pytest.mark.requires_data,
@@ -121,3 +128,36 @@ def test_cphd_metadata_to_collection_geometry(require_cphd_file):
         geom = CollectionGeometry(meta)
         assert geom is not None
         assert hasattr(geom, 'graz_ang') or hasattr(geom, 'azim_ang')
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.skipif(not _HAS_DATA_PREP, reason="grdl.data_prep not available")
+def test_cphd_chip_extractor(require_cphd_file):
+    """ChipExtractor partitions CPHD phase history data."""
+    with CPHDReader(require_cphd_file) as reader:
+        shape = reader.get_shape()
+        rows, cols = shape[0], shape[1]
+        extractor = ChipExtractor(nrows=rows, ncols=cols)
+        regions = extractor.chip_positions(row_width=128, col_width=128)
+        assert len(regions) > 0
+
+        region = regions[0]
+        assert 0 <= region.row_start < region.row_end <= rows
+        assert 0 <= region.col_start < region.col_end <= cols
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.skipif(not _HAS_DATA_PREP, reason="grdl.data_prep not available")
+def test_cphd_normalizer(require_cphd_file):
+    """MinMax normalization on CPHD magnitude produces [0, 1]."""
+    with CPHDReader(require_cphd_file) as reader:
+        data = reader.read_full()
+        magnitude = np.abs(data).astype(np.float64)
+
+        normalizer = Normalizer(method='minmax')
+        normalized = normalizer.normalize(magnitude)
+
+        assert normalized.min() == pytest.approx(0.0, abs=1e-6)
+        assert normalized.max() == pytest.approx(1.0, abs=1e-6)
