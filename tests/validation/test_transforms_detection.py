@@ -79,13 +79,18 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def translation_result():
-    """RegistrationResult with a pure 10px translation in both axes.
+    """RegistrationResult with a pure translation in (row, col) space.
 
-    Transform matrix: identity + (10, 5) translation.
+    Matrix is (2, 3) operating on (row, col) coordinates:
+        row_out = row_in + 10
+        col_out = col_in + 5
+
+    For shapely Point(x=col, y=row), this means:
+        Point(col, row) → Point(col+5, row+10)
     """
     matrix = np.array([
-        [1.0, 0.0, 10.0],
-        [0.0, 1.0, 5.0],
+        [1.0, 0.0, 10.0],  # row_out = row + 10
+        [0.0, 1.0, 5.0],   # col_out = col + 5
     ], dtype=np.float64)
     return RegistrationResult(
         transform_matrix=matrix,
@@ -119,7 +124,11 @@ def sample_detection_set(sample_detection):
             confidence=0.8 + i * 0.05,
         )
         detections.append(det)
-    return DetectionSet(detections=detections)
+    return DetectionSet(
+        detections=detections,
+        detector_name='test_detector',
+        detector_version='0.1.0',
+    )
 
 
 # =============================================================================
@@ -177,19 +186,19 @@ class TestTransformsLevel2:
     """Validate correct coordinate transformation."""
 
     def test_transform_known_translation(self, translation_result):
-        """10px col + 5px row translation applied correctly to Point.
+        """Translation in (row, col) space applied correctly to Point.
 
-        Input Point(100, 50) with translation (10, 5) should produce
-        Point(110, 55).
+        Input Point(x=100, y=50) means col=100, row=50.
+        Matrix adds 10 to row, 5 to col → Point(105, 60).
         """
         pt = Point(100.0, 50.0)
         result = transform_pixel_geometry(pt, translation_result)
-        # Expected: col=100+10=110, row=50+5=55
-        assert abs(result.x - 110.0) < 0.1, (
-            f"Translated x={result.x:.2f}, expected 110.0"
+        # row=50+10=60, col=100+5=105 → Point(x=105, y=60)
+        assert abs(result.x - 105.0) < 0.1, (
+            f"Translated col: x={result.x:.2f}, expected 105.0"
         )
-        assert abs(result.y - 55.0) < 0.1, (
-            f"Translated y={result.y:.2f}, expected 55.0"
+        assert abs(result.y - 60.0) < 0.1, (
+            f"Translated row: y={result.y:.2f}, expected 60.0"
         )
 
     def test_transform_preserves_attributes(
@@ -208,14 +217,17 @@ class TestTransformsLevel2:
         )
 
     def test_transform_bbox_refit(self, translation_result):
-        """bbox_mode='refit' produces axis-aligned bounding box."""
+        """bbox_mode='refit' produces correctly translated bounding box.
+
+        box(10, 20, 50, 60) = col∈[10,50], row∈[20,60].
+        After row+10, col+5 → col∈[15,55], row∈[30,70].
+        """
         bbox = box(10, 20, 50, 60)
         result = transform_pixel_geometry(
             bbox, translation_result, bbox_mode='refit'
         )
-        # Translated box should be at (20, 30, 60, 70)
         bounds = result.bounds  # (minx, miny, maxx, maxy)
-        assert abs(bounds[0] - 20.0) < 0.1, f"minx={bounds[0]}"
-        assert abs(bounds[1] - 25.0) < 0.1, f"miny={bounds[1]}"
-        assert abs(bounds[2] - 60.0) < 0.1, f"maxx={bounds[2]}"
-        assert abs(bounds[3] - 65.0) < 0.1, f"maxy={bounds[3]}"
+        assert abs(bounds[0] - 15.0) < 0.1, f"mincol: minx={bounds[0]}, expected 15"
+        assert abs(bounds[1] - 30.0) < 0.1, f"minrow: miny={bounds[1]}, expected 30"
+        assert abs(bounds[2] - 55.0) < 0.1, f"maxcol: maxx={bounds[2]}, expected 55"
+        assert abs(bounds[3] - 70.0) < 0.1, f"maxrow: maxy={bounds[3]}, expected 70"

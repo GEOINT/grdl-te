@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-OrthoPipeline Tests - Synthetic validation of the ortho pipeline.
+OrthoBuilder Tests - Synthetic validation of the ortho pipeline.
 
-Tests OrthoPipeline builder pattern, OrthoResult container, and
+Tests OrthoBuilder builder pattern, OrthoResult container, and
 compute_output_resolution using synthetic affine geolocation.
 
 - Level 1: Builder methods chain correctly, pipeline configures
@@ -50,7 +50,7 @@ except ImportError:
 
 try:
     from grdl.image_processing.ortho import (
-        OrthoPipeline,
+        OrthoBuilder,
         OrthoResult,
         Orthorectifier,
         OutputGrid,
@@ -99,49 +99,49 @@ def synthetic_ortho_setup():
 
 
 # ---------------------------------------------------------------------------
-# Level 1: OrthoPipeline builder pattern
+# Level 1: OrthoBuilder builder pattern
 # ---------------------------------------------------------------------------
-class TestOrthoPipelineLevel1:
+class TestOrthoBuilderLevel1:
     """Validate builder pattern and configuration."""
 
     def test_builder_chaining(self, synthetic_ortho_setup):
         """Builder methods return self for chaining."""
         image, geo, _, _ = synthetic_ortho_setup
         pipeline = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_resolution(0.00054, 0.00054)
             .with_interpolation('bilinear')
             .with_nodata(0.0)
         )
-        assert isinstance(pipeline, OrthoPipeline)
+        assert isinstance(pipeline, OrthoBuilder)
 
     def test_with_interpolation_methods(self, synthetic_ortho_setup):
         """Pipeline accepts all interpolation methods."""
         image, geo, _, _ = synthetic_ortho_setup
         for method in ('nearest', 'bilinear', 'bicubic'):
             pipeline = (
-                OrthoPipeline()
+                OrthoBuilder()
                 .with_source_array(image)
                 .with_geolocation(geo)
                 .with_resolution(0.00054, 0.00054)
                 .with_interpolation(method)
             )
-            assert isinstance(pipeline, OrthoPipeline)
+            assert isinstance(pipeline, OrthoBuilder)
 
 
 # ---------------------------------------------------------------------------
 # Level 2: run() produces correct OrthoResult
 # ---------------------------------------------------------------------------
-class TestOrthoPipelineLevel2:
+class TestOrthoBuilderLevel2:
     """Validate run() output correctness."""
 
     def test_run_returns_ortho_result(self, synthetic_ortho_setup):
         """run() returns an OrthoResult."""
         image, geo, _, _ = synthetic_ortho_setup
         pipeline = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_resolution(0.00054, 0.00054)
@@ -154,7 +154,7 @@ class TestOrthoPipelineLevel2:
         """OrthoResult.data is a 2D array."""
         image, geo, _, _ = synthetic_ortho_setup
         pipeline = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_resolution(0.00054, 0.00054)
@@ -172,7 +172,7 @@ class TestOrthoPipelineLevel2:
         """
         image, geo, _, _ = synthetic_ortho_setup
         pipeline = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_resolution(0.00054, 0.00054)
@@ -200,7 +200,7 @@ class TestOrthoPipelineLevel2:
         """
         image, geo, _, _ = synthetic_ortho_setup
         pipeline = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_resolution(0.00054, 0.00054)
@@ -225,7 +225,7 @@ class TestOrthoPipelineLevel2:
         """OrthoResult carries an OutputGrid."""
         image, geo, _, _ = synthetic_ortho_setup
         pipeline = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_resolution(0.00054, 0.00054)
@@ -243,13 +243,13 @@ class TestOrthoPipelineLevel2:
         """
         image, geo, _, _ = synthetic_ortho_setup
         fine = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_resolution(0.00027, 0.00027)   # 1× input pixel size
         ).run()
         coarse = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_resolution(0.00054, 0.00054)   # 2× coarser
@@ -272,7 +272,7 @@ class TestOrthoPipelineLevel2:
         """
         image, geo, _, _ = synthetic_ortho_setup
         nearest_result = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_resolution(0.00054, 0.00054)
@@ -280,7 +280,7 @@ class TestOrthoPipelineLevel2:
             .with_interpolation('nearest')
         ).run()
         bilinear_result = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_resolution(0.00054, 0.00054)
@@ -307,7 +307,7 @@ class TestOrthoPipelineLevel2:
 # ---------------------------------------------------------------------------
 # Level 3: Integration — save_geotiff and compute_output_resolution
 # ---------------------------------------------------------------------------
-class TestOrthoPipelineLevel3:
+class TestOrthoBuilderLevel3:
     """Integration: GeoTIFF output and auto-resolution."""
 
     @pytest.mark.integration
@@ -317,7 +317,7 @@ class TestOrthoPipelineLevel3:
 
         image, geo, _, _ = synthetic_ortho_setup
         pipeline = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_resolution(0.00054, 0.00054)
@@ -465,7 +465,7 @@ class TestComputeOutputResolution:
 @pytest.mark.skipif(not _HAS_ENU, reason="ENUGrid not available")
 class TestENUGridIntegration:
     """Validate ENUGrid as a drop-in replacement for OutputGrid in
-    Orthorectifier and OrthoPipeline.
+    Orthorectifier and OrthoBuilder.
 
     All tests use the same synthetic AffineGeolocation fixture as the
     existing ortho tests (no real imagery required).
@@ -517,24 +517,24 @@ class TestENUGridIntegration:
         )
 
     def test_ortho_pipeline_with_enu_builder(self, synthetic_ortho_setup):
-        """OrthoPipeline.with_enu_grid() executes and returns OrthoResult."""
+        """OrthoBuilder.with_enu_grid() executes and returns OrthoResult."""
         image, geo, _, _ = synthetic_ortho_setup
         result = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_enu_grid(pixel_size_m=10.0)
             .run()
         )
         assert isinstance(result, OrthoResult), (
-            "OrthoPipeline.with_enu_grid().run() must return OrthoResult"
+            "OrthoBuilder.with_enu_grid().run() must return OrthoResult"
         )
 
     def test_enu_result_is_enu_flag(self, synthetic_ortho_setup):
         """OrthoResult.is_enu is True when the pipeline used with_enu_grid()."""
         image, geo, _, _ = synthetic_ortho_setup
         result = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_enu_grid(pixel_size_m=10.0)
@@ -548,7 +548,7 @@ class TestENUGridIntegration:
         """OrthoResult.is_enu is False for a standard geographic OutputGrid pipeline."""
         image, geo, _, _ = synthetic_ortho_setup
         result = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_resolution(0.00054, 0.00054)
@@ -562,7 +562,7 @@ class TestENUGridIntegration:
         """OrthoResult.pixel_size_meters returns the configured pixel size."""
         image, geo, _, _ = synthetic_ortho_setup
         result = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_enu_grid(pixel_size_m=15.0)
@@ -582,7 +582,7 @@ class TestENUGridIntegration:
         """OrthoResult.bounds_meters returns finite (min_east, min_north, max_east, max_north)."""
         image, geo, _, _ = synthetic_ortho_setup
         result = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_enu_grid(pixel_size_m=10.0)
@@ -602,7 +602,7 @@ class TestENUGridIntegration:
         """geolocation_metadata['crs'] is 'ENU' for an ENU output."""
         image, geo, _, _ = synthetic_ortho_setup
         result = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_enu_grid(pixel_size_m=10.0)
@@ -618,7 +618,7 @@ class TestENUGridIntegration:
         """geolocation_metadata['transform'] is a 6-tuple for ENU output."""
         image, geo, _, _ = synthetic_ortho_setup
         result = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_enu_grid(pixel_size_m=10.0)
@@ -644,7 +644,7 @@ class TestENUGridIntegration:
             geo, pixel_size_lat=0.00054, pixel_size_lon=0.00054,
         )
         result = (
-            OrthoPipeline()
+            OrthoBuilder()
             .with_source_array(image)
             .with_geolocation(geo)
             .with_enu_grid(pixel_size_m=10.0)    # set ENU

@@ -273,22 +273,36 @@ class TestDominanceLevel1:
 class TestDominanceLevel2:
     """Validate physical bounds of dominance and entropy."""
 
-    def test_dominance_bounded(self, synthetic_sublooks):
-        """Dominance ratio is in [dom_window/n_looks, 1.0].
-
-        The lower bound is dom_window/n_looks because even with perfectly
-        uniform power, the best window of dom_window contiguous looks
-        captures that fraction of total power.
-        """
+    def test_dominance_hard_bounds(self, synthetic_sublooks):
+        """Dominance ratio is in [0, 1] for arbitrary input."""
         dom = compute_dominance(synthetic_sublooks, dom_window=3)
-        n_looks = synthetic_sublooks.shape[0]
-        lower_bound = 3.0 / n_looks - 0.01  # small tolerance
-        assert dom.min() >= lower_bound, (
-            f"Dominance min {dom.min():.4f} below theoretical lower bound "
-            f"{lower_bound:.4f}"
+        assert dom.min() >= 0.0, (
+            f"Dominance min {dom.min():.6f} is negative"
         )
         assert dom.max() <= 1.0 + 1e-6, (
-            f"Dominance max {dom.max():.4f} exceeds 1.0"
+            f"Dominance max {dom.max():.6f} exceeds 1.0"
+        )
+
+    def test_dominance_uniform_equals_ratio(self):
+        """With perfectly uniform power, dominance == dom_window / n_looks.
+
+        All-ones input produces identical power in every look after
+        spatial smoothing.  The sliding window then captures exactly
+        dom_window/n_looks of the total, verifying the core arithmetic.
+        """
+        n_looks, rows, cols = 5, 64, 64
+        uniform = np.ones((n_looks, rows, cols), dtype=np.complex64)
+        dom = compute_dominance(uniform, window_size=7, dom_window=3)
+
+        expected = 3.0 / 5.0
+        # Interior pixels (away from uniform_filter boundary)
+        interior = dom[10:-10, 10:-10]
+        np.testing.assert_allclose(
+            interior, expected, atol=1e-6,
+            err_msg=(
+                f"Uniform input should give dominance == {expected:.4f} "
+                f"but got [{interior.min():.6f}, {interior.max():.6f}]"
+            ),
         )
 
     def test_entropy_non_negative(self, synthetic_sublooks):

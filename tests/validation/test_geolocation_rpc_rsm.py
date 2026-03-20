@@ -72,17 +72,20 @@ def synthetic_rpc():
     a 4096x4096 image with 0.5m GSD. Uses simplified coefficients
     that provide an approximately linear mapping.
     """
-    # Near-identity polynomial: first coefficient dominates
+    # Identity-like polynomial: at the offset point (P=0, L=0, H=0),
+    # rn = num[0]/den[0] = 0/1 = 0, so row = line_off + line_scale*0 = line_off.
+    # The P (lat) and L (lon) linear terms create spatial variation away
+    # from the center.
     line_num = np.zeros(20)
-    line_num[0] = 1.0   # constant term
-    line_num[1] = 0.001  # slight lat dependence
+    line_num[0] = 0.0    # zero constant → rn=0 at center → row=line_off
+    line_num[2] = 1.0    # P (lat) linear dependence
 
     line_den = np.zeros(20)
-    line_den[0] = 1.0   # normalize to 1
+    line_den[0] = 1.0    # normalize to 1
 
     samp_num = np.zeros(20)
-    samp_num[0] = 1.0
-    samp_num[2] = 0.001  # slight lon dependence
+    samp_num[0] = 0.0    # zero constant → cn=0 at center → col=samp_off
+    samp_num[1] = 1.0    # L (lon) linear dependence
 
     samp_den = np.zeros(20)
     samp_den[0] = 1.0

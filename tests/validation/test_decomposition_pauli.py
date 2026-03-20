@@ -54,11 +54,13 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def synthetic_quad_pol():
-    """Synthetic quad-pol complex SAR channels.
+    """Synthetic quad-pol complex SAR channels with monostatic reciprocity.
 
     Four channels representing the full 2x2 scattering matrix:
-    S_HH, S_HV, S_VH, S_VV. Cross-pol channels (HV, VH) have
-    30% relative power to co-pol channels.
+    S_HH, S_HV, S_VH, S_VV. Cross-pol channels enforce monostatic
+    reciprocity (S_HV == S_VH) at 30% relative power, which is
+    the physically correct assumption for monostatic SAR and enables
+    exact Pauli span conservation testing.
     """
     rng = np.random.default_rng(42)
     rows, cols = 256, 256
@@ -74,10 +76,7 @@ def synthetic_quad_pol():
         rng.standard_normal((rows, cols)) * 0.3
         + 1j * rng.standard_normal((rows, cols)) * 0.3
     ).astype(np.complex64)
-    svh = (
-        rng.standard_normal((rows, cols)) * 0.3
-        + 1j * rng.standard_normal((rows, cols)) * 0.3
-    ).astype(np.complex64)
+    svh = shv.copy()  # monostatic reciprocity
     return shh, shv, svh, svv
 
 

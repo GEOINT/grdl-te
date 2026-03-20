@@ -120,8 +120,8 @@ class TestFeatureMatchLevel1:
         fixed, moving = feature_rich_pair
         coreg = FeatureMatchCoRegistration(method='orb')
         result = coreg.estimate(fixed, moving)
-        # Metadata should record the method used
-        assert result.metadata.get('method', 'orb') == 'orb'
+        # Metadata records the full method name
+        assert result.metadata.get('method') == 'feature_match_orb'
 
 
 # =============================================================================
@@ -135,8 +135,10 @@ class TestFeatureMatchLevel2:
     def test_feature_match_synthetic_shift(self, feature_rich_pair):
         """Detects known 5px translation within tolerance.
 
-        The ground truth shift is (row=5, col=3). The estimated
-        translation components of the affine matrix should be close.
+        The moving image is shifted down by 5 rows and right by 3 cols
+        relative to fixed (moving[5:, 3:] = fixed[:-5, :-3]). The
+        transform maps moving → fixed in (row, col) space, so the
+        estimated translation should be approximately (-5, -3).
         """
         fixed, moving = feature_rich_pair
         coreg = FeatureMatchCoRegistration(
@@ -145,16 +147,16 @@ class TestFeatureMatchLevel2:
         result = coreg.estimate(fixed, moving)
         matrix = result.transform_matrix
 
-        # Translation is in the last column of the affine matrix
-        tx = matrix[1, 2]  # col translation
-        ty = matrix[0, 2]  # row translation
+        # Matrix is (2, 3) in (row, col) space: [[a b ty], [c d tx]]
+        ty = matrix[0, 2]  # row translation (moving → fixed)
+        tx = matrix[1, 2]  # col translation (moving → fixed)
 
-        # Should be close to the known shift (5, 3) ± 2px tolerance
-        assert abs(ty - 5.0) < 3.0, (
-            f"Row translation {ty:.2f} not close to expected 5.0"
+        # Moving→fixed undoes the (5, 3) shift → expect ≈ (-5, -3)
+        assert abs(ty - (-5.0)) < 3.0, (
+            f"Row translation {ty:.2f} not close to expected -5.0"
         )
-        assert abs(tx - 3.0) < 3.0, (
-            f"Col translation {tx:.2f} not close to expected 3.0"
+        assert abs(tx - (-3.0)) < 3.0, (
+            f"Col translation {tx:.2f} not close to expected -3.0"
         )
 
     def test_feature_match_residuals(self, feature_rich_pair):

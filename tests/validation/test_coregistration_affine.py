@@ -55,15 +55,18 @@ pytestmark = [
 def known_affine_transform():
     """Known affine transform: 2px translation + small rotation.
 
+    The ground truth matrix maps moving → fixed, matching the
+    direction that AffineCoRegistration.estimate() solves for.
+
     Returns (fixed_pts, moving_pts, ground_truth_matrix).
     """
     rng = np.random.default_rng(42)
     n_pts = 20
 
-    # Generate fixed control points spread across a 256x256 image
-    fixed_pts = rng.uniform(20, 236, size=(n_pts, 2))
+    # Generate moving control points spread across a 256x256 image
+    moving_pts = rng.uniform(20, 236, size=(n_pts, 2))
 
-    # Known transform: 2px translation + 2-degree rotation
+    # Known transform: maps moving → fixed (2px translation + 2-degree rotation)
     theta = np.radians(2.0)
     tx, ty = 2.0, -1.5
     gt_matrix = np.array([
@@ -71,10 +74,10 @@ def known_affine_transform():
         [np.sin(theta),  np.cos(theta), ty],
     ], dtype=np.float64)
 
-    # Apply transform to get moving points
+    # Apply transform to get fixed points: fixed = gt_matrix @ moving
     ones = np.ones((n_pts, 1))
-    fixed_h = np.hstack([fixed_pts, ones])
-    moving_pts = (gt_matrix @ fixed_h.T).T
+    moving_h = np.hstack([moving_pts, ones])
+    fixed_pts = (gt_matrix @ moving_h.T).T
 
     return fixed_pts, moving_pts, gt_matrix
 
