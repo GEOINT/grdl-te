@@ -50,6 +50,7 @@ import pytest
 
 try:
     import cupy as cp
+
     cp.array([1.0])  # verify GPU is actually functional
     _HAS_CUPY = True
 except Exception:

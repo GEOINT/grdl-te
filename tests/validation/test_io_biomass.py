@@ -164,7 +164,12 @@ def test_biomass_chip_extractor(require_biomass_file):
             region.row_start, region.row_end,
             region.col_start, region.col_end,
         )
-        assert chip.shape[0] == region.row_end - region.row_start
+        # BIOMASS has 4 polarization bands: (pols, rows, cols)
+        if chip.ndim == 3:
+            assert chip.shape[1] == region.row_end - region.row_start
+            assert chip.shape[2] == region.col_end - region.col_start
+        else:
+            assert chip.shape[0] == region.row_end - region.row_start
 
 
 @pytest.mark.slow

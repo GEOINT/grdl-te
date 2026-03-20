@@ -94,22 +94,22 @@ def test_umbra_metadata(require_umbra_file):
 
 @pytest.mark.slow
 def test_umbra_complex_dtype(require_umbra_file):
-    """Verify NITFReader detects complex SAR data type.
+    """Verify NITFReader dtype for SICD data.
 
-    SICD files contain complex-valued SAR imagery. The dtype must
-    be complex64 or complex128.
+    GDAL's NITF driver exposes complex SAR data as separate real/imag
+    float32 bands.  For native complex handling use SICDReader instead.
     """
     with NITFReader(str(require_umbra_file)) as reader:
         dtype = reader.get_dtype()
 
-        # SICD files contain complex-valued SAR imagery
-        assert dtype in [np.complex64, np.complex128], \
-            f"Expected complex dtype for SICD, got: {dtype}"
+        # GDAL decomposes complex into two float32 bands (real, imag)
+        assert dtype == np.float32, \
+            f"Expected float32 (GDAL real/imag bands) for SICD, got: {dtype}"
 
         # dtype must agree with metadata
         assert str(dtype) == reader.metadata.dtype
 
-        print(f"Umbra SICD dtype: {dtype} (complex SAR data)")
+        print(f"Umbra SICD dtype: {dtype} (GDAL real/imag bands)")
 
 
 @pytest.mark.slow
@@ -135,11 +135,11 @@ def test_umbra_get_shape(require_umbra_file):
 
 @pytest.mark.slow
 def test_umbra_read_chip(require_umbra_file):
-    """Verify read_chip() returns complex-valued array with correct shape."""
+    """Verify read_chip() returns real/imag bands with correct shape."""
     with NITFReader(str(require_umbra_file)) as reader:
         rows, cols = reader.get_shape()[:2]
 
-        # Read 256x256 chip from center (smaller for complex data)
+        # Read 256x256 chip from center
         row_start = max(0, rows // 2 - 128)
         row_end = min(rows, rows // 2 + 128)
         col_start = max(0, cols // 2 - 128)
@@ -148,16 +148,19 @@ def test_umbra_read_chip(require_umbra_file):
         chip = reader.read_chip(row_start, row_end, col_start, col_end)
 
         assert isinstance(chip, np.ndarray)
-        assert chip.ndim == 2  # Single band (complex)
-        assert chip.shape[0] == (row_end - row_start)
-        assert chip.shape[1] == (col_end - col_start)
-        assert chip.dtype in [np.complex64, np.complex128]
+        # GDAL exposes SICD as 2 float32 bands (real, imag)
+        assert chip.ndim == 3
+        assert chip.shape[0] == 2  # real + imag bands
+        assert chip.shape[1] == (row_end - row_start)
+        assert chip.shape[2] == (col_end - col_start)
+        assert chip.dtype == np.float32
 
-        # Complex SAR data should have non-zero content
-        assert np.abs(chip).max() > 0, \
+        # Reconstruct complex and verify non-zero content
+        complex_chip = chip[0] + 1j * chip[1]
+        assert np.abs(complex_chip).max() > 0, \
             "Center chip has zero magnitude (no SAR signal)"
 
-        print(f"Complex chip shape: {chip.shape}, dtype: {chip.dtype}")
+        print(f"Chip shape: {chip.shape}, dtype: {chip.dtype}")
 
 
 @pytest.mark.slow
@@ -334,7 +337,7 @@ def test_umbra_sar_statistics(require_umbra_file):
 def test_umbra_chip_extractor_integration(require_umbra_file):
     """Validate ChipExtractor partitions Umbra SAR data into uniform chips.
 
-    Verifies chip regions are within bounds and that complex-valued
+    Verifies chip regions are within bounds and that real/imag band
     chips have correct dimensions and dtype.
     """
     with NITFReader(str(require_umbra_file)) as reader:
@@ -355,10 +358,12 @@ def test_umbra_chip_extractor_integration(require_umbra_file):
             )
 
             assert isinstance(chip, np.ndarray)
-            assert chip.ndim == 2
-            assert chip.dtype in [np.complex64, np.complex128]
-            assert chip.shape[0] == region.row_end - region.row_start
-            assert chip.shape[1] == region.col_end - region.col_start
+            # GDAL exposes SICD as 2 float32 bands (real, imag)
+            assert chip.ndim == 3
+            assert chip.shape[0] == 2
+            assert chip.dtype == np.float32
+            assert chip.shape[1] == region.row_end - region.row_start
+            assert chip.shape[2] == region.col_end - region.col_start
 
         print(f"ChipExtractor: {len(regions)} SAR chips validated")
 
@@ -427,10 +432,12 @@ def test_umbra_tiler_integration(require_umbra_file):
             )
 
             assert isinstance(tile, np.ndarray)
-            assert tile.ndim == 2
-            assert tile.dtype in [np.complex64, np.complex128]
-            assert tile.shape[0] <= 256
+            # GDAL exposes SICD as 2 float32 bands (real, imag)
+            assert tile.ndim == 3
+            assert tile.shape[0] == 2
+            assert tile.dtype == np.float32
             assert tile.shape[1] <= 256
+            assert tile.shape[2] <= 256
 
         print(f"Tiler: {len(tiles)} SAR tiles validated")
 
@@ -493,11 +500,16 @@ def test_umbra_complex_data_preservation(require_umbra_file):
             cols // 4, cols // 4 + 256
         )
 
-        assert chip.dtype in [np.complex64, np.complex128]
+        # GDAL exposes SICD as 2 float32 bands (real, imag)
+        assert chip.dtype == np.float32
+        assert chip.ndim == 3 and chip.shape[0] == 2
+
+        # Reconstruct complex from real/imag bands
+        complex_chip = chip[0] + 1j * chip[1]
 
         # Extract magnitude and phase
-        magnitude = np.abs(chip)
-        phase = np.angle(chip)
+        magnitude = np.abs(complex_chip)
+        phase = np.angle(complex_chip)
 
         # Reconstruct complex from magnitude and phase
         reconstructed = magnitude * np.exp(1j * phase)
@@ -506,9 +518,9 @@ def test_umbra_complex_data_preservation(require_umbra_file):
         # Magnitude/phase round-trip amplifies relative error near zero,
         # so use atol alongside rtol for robustness.
         np.testing.assert_allclose(
-            chip.real, reconstructed.real, rtol=1e-2, atol=1e-6)
+            complex_chip.real, reconstructed.real, rtol=1e-2, atol=1e-6)
         np.testing.assert_allclose(
-            chip.imag, reconstructed.imag, rtol=1e-2, atol=1e-6)
+            complex_chip.imag, reconstructed.imag, rtol=1e-2, atol=1e-6)
 
         print("Complex data integrity verified: magnitude + phase preserved")
 

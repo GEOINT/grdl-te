@@ -134,8 +134,9 @@ def test_sicd_footprint(require_umbra_file):
         if hasattr(geo, 'get_footprint'):
             footprint = geo.get_footprint()
             if footprint is not None:
-                # Should have at least 4 corner points
-                coords = list(footprint.exterior.coords)
+                # get_footprint returns a dict with 'type', 'coordinates', 'bounds'
+                assert footprint['type'] == 'Polygon'
+                coords = footprint['coordinates']
                 assert len(coords) >= 4, (
                     f"Footprint has {len(coords)} points, expected >= 4"
                 )
