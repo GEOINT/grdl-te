@@ -391,8 +391,8 @@ class TestChipGeolocationIntegration:
             origin_lat=35.0, origin_lon=-118.0,
             dlat=0.001, dlon=0.001,
         )
-        extractor = ChipExtractor(chip_size=256, stride=256)
-        regions = extractor.get_regions(parent.shape[0], parent.shape[1])
+        extractor = ChipExtractor(nrows=parent.shape[0], ncols=parent.shape[1])
+        regions = extractor.chip_positions(row_width=256, col_width=256)
 
         for region in regions[:4]:  # test first 4 chips
             chip = ChipGeolocation(
