@@ -90,11 +90,12 @@ class TestConstantElevation:
         assert result.shape == (3,)
         np.testing.assert_array_almost_equal(result, 250.0)
 
-    def test_stacked_2xN_query(self):
-        """Stacked (2, N) input returns (N,) array."""
+    def test_stacked_Nx2_query(self):
+        """Stacked (N, 2) input returns (N,) array."""
         elev = ConstantElevation(height=500.0)
-        pts = np.array([[34.0, 35.0, 36.0],
-                        [-118.0, -117.0, -116.0]])
+        pts = np.array([[34.0, -118.0],
+                        [35.0, -117.0],
+                        [36.0, -116.0]])
         result = elev.get_elevation(pts)
 
         assert isinstance(result, np.ndarray)
@@ -203,15 +204,15 @@ class TestElevationModelDispatch:
         np.testing.assert_array_almost_equal(result, [10.0, 20.0, 30.0])
 
     def test_stacked_dispatch(self, mock_elev):
-        """Stacked (2, N) input returns (N,) array."""
-        pts = np.array([[1.0, 2.0], [10.0, 20.0]])
+        """Stacked (N, 2) input returns (N,) array."""
+        pts = np.array([[1.0, 10.0], [2.0, 20.0]])
         result = mock_elev.get_elevation(pts)
         assert result.shape == (2,)
         np.testing.assert_array_almost_equal(result, [10.0, 20.0])
 
     def test_stacked_invalid_shape_raises(self, mock_elev):
-        """Non-(2, N) array must raise ValueError."""
-        with pytest.raises(ValueError, match="Expected \\(2, N\\)"):
+        """Non-(N, 2) array must raise ValueError."""
+        with pytest.raises(ValueError, match=r"Expected \(N, 2\) array, got shape"):
             mock_elev.get_elevation(np.array([[1.0, 2.0, 3.0]]))
 
     def test_list_dispatch(self, mock_elev):

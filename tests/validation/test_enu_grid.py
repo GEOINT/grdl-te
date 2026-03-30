@@ -261,13 +261,13 @@ class TestENUGridCoordinateTransforms:
         lat_a, lon_a = grid.image_to_latlon(4.0, 4.0)
         lat_b, lon_b = grid.image_to_latlon(4.0, 5.0)
 
-        xa, ya, za = geodetic_to_ecef(
-            np.array([float(lat_a)]), np.array([float(lon_a)]), np.zeros(1)
+        ecef_a = geodetic_to_ecef(
+            np.array([float(lat_a), float(lon_a), 0.0])
         )
-        xb, yb, zb = geodetic_to_ecef(
-            np.array([float(lat_b)]), np.array([float(lon_b)]), np.zeros(1)
+        ecef_b = geodetic_to_ecef(
+            np.array([float(lat_b), float(lon_b), 0.0])
         )
-        dist = float(np.sqrt((xb[0] - xa[0])**2 + (yb[0] - ya[0])**2 + (zb[0] - za[0])**2))
+        dist = float(np.linalg.norm(ecef_b - ecef_a))
 
         assert dist <= 1.01, (
             f"Adjacent pixel distance {dist:.4f} m exceeds 1.01 m "

@@ -31,11 +31,8 @@ Created
 
 Modified
 --------
-2026-03-09
+2026-03-30
 """
-
-# Standard library
-from typing import Tuple
 
 # Third-party
 import pytest
@@ -65,9 +62,19 @@ pytestmark = [
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_scalar_arrays(*vals) -> Tuple[np.ndarray, ...]:
-    """Wrap scalars in 1-element float64 arrays."""
-    return tuple(np.array([v], dtype=np.float64) for v in vals)
+def _make_point(lat: float, lon: float, height: float) -> np.ndarray:
+    """Create a single geodetic point as a (3,) array [lat, lon, height]."""
+    return np.array([lat, lon, height], dtype=np.float64)
+
+
+def _make_points(lats: np.ndarray, lons: np.ndarray, heights: np.ndarray) -> np.ndarray:
+    """Stack separate coordinate arrays into an (N, 3) array [lat, lon, height]."""
+    return np.column_stack([lats, lons, heights])
+
+
+def _make_ref(lat: float, lon: float, alt: float) -> np.ndarray:
+    """Create a reference point as a (3,) array [lat, lon, alt]."""
+    return np.array([lat, lon, alt], dtype=np.float64)
 
 
 # ===========================================================================
@@ -75,7 +82,7 @@ def _make_scalar_arrays(*vals) -> Tuple[np.ndarray, ...]:
 # ===========================================================================
 
 class TestGeodeticEcef:
-    """Round-trip and known-value tests for geodetic ↔ ECEF."""
+    """Round-trip and known-value tests for geodetic <-> ECEF."""
 
     def test_equator_prime_meridian_known_ecef(self):
         """Equator / prime meridian maps to ECEF (WGS84_A, 0, 0).
@@ -83,14 +90,14 @@ class TestGeodeticEcef:
         At lat=0, lon=0, alt=0 the ECEF X coordinate must equal the
         WGS-84 semi-major axis (6 378 137 m) and Y=Z=0.
         """
-        lats, lons, hts = _make_scalar_arrays(0.0, 0.0, 0.0)
-        x, y, z = geodetic_to_ecef(lats, lons, hts)
+        pt = _make_point(0.0, 0.0, 0.0)
+        result = geodetic_to_ecef(pt)
 
-        assert abs(float(x[0]) - WGS84_A) < 1.0, (
-            f"X at equator/prime meridian = {x[0]:.3f} m, expected {WGS84_A:.3f} m"
+        assert abs(float(result[0]) - WGS84_A) < 1.0, (
+            f"X at equator/prime meridian = {result[0]:.3f} m, expected {WGS84_A:.3f} m"
         )
-        assert abs(float(y[0])) < 1.0, f"Y at equator/prime meridian = {y[0]:.3f} m, expected 0"
-        assert abs(float(z[0])) < 1.0, f"Z at equator/prime meridian = {z[0]:.3f} m, expected 0"
+        assert abs(float(result[1])) < 1.0, f"Y at equator/prime meridian = {result[1]:.3f} m, expected 0"
+        assert abs(float(result[2])) < 1.0, f"Z at equator/prime meridian = {result[2]:.3f} m, expected 0"
 
     def test_north_pole_ecef_z_equals_semiminor(self):
         """North pole maps to ECEF (0, 0, WGS84_B).
@@ -98,26 +105,26 @@ class TestGeodeticEcef:
         At lat=+90°, lon=0°, alt=0 the ECEF Z coordinate must equal the
         WGS-84 semi-minor axis (~6 356 752 m).
         """
-        lats, lons, hts = _make_scalar_arrays(90.0, 0.0, 0.0)
-        x, y, z = geodetic_to_ecef(lats, lons, hts)
+        pt = _make_point(90.0, 0.0, 0.0)
+        result = geodetic_to_ecef(pt)
 
-        assert abs(float(z[0]) - WGS84_B) < 1.0, (
-            f"Z at north pole = {z[0]:.3f} m, expected {WGS84_B:.3f} m"
+        assert abs(float(result[2]) - WGS84_B) < 1.0, (
+            f"Z at north pole = {result[2]:.3f} m, expected {WGS84_B:.3f} m"
         )
-        assert abs(float(x[0])) < 1.0, f"X at north pole should be near 0, got {x[0]:.3f} m"
-        assert abs(float(y[0])) < 1.0, f"Y at north pole should be near 0, got {y[0]:.3f} m"
+        assert abs(float(result[0])) < 1.0, f"X at north pole should be near 0, got {result[0]:.3f} m"
+        assert abs(float(result[1])) < 1.0, f"Y at north pole should be near 0, got {result[1]:.3f} m"
 
     def test_south_pole_ecef_z_equals_negative_semiminor(self):
         """South pole maps to ECEF (0, 0, -WGS84_B)."""
-        lats, lons, hts = _make_scalar_arrays(-90.0, 0.0, 0.0)
-        x, y, z = geodetic_to_ecef(lats, lons, hts)
+        pt = _make_point(-90.0, 0.0, 0.0)
+        result = geodetic_to_ecef(pt)
 
-        assert abs(float(z[0]) + WGS84_B) < 1.0, (
-            f"Z at south pole = {z[0]:.3f} m, expected {-WGS84_B:.3f} m"
+        assert abs(float(result[2]) + WGS84_B) < 1.0, (
+            f"Z at south pole = {result[2]:.3f} m, expected {-WGS84_B:.3f} m"
         )
 
     def test_round_trip_general_points(self):
-        """geodetic → ECEF → geodetic recovers input within 1e-7 degrees and 1 mm.
+        """geodetic -> ECEF -> geodetic recovers input within 1e-7 degrees and 1 mm.
 
         Tests a grid of points spanning the globe to catch any systematic
         formula error that would not be visible in a single known-value check.
@@ -127,8 +134,13 @@ class TestGeodeticEcef:
         lons = rng.uniform(-180.0, 180.0, 100)
         hts = rng.uniform(-500.0, 10000.0, 100)
 
-        x, y, z = geodetic_to_ecef(lats, lons, hts)
-        lats_rt, lons_rt, hts_rt = ecef_to_geodetic(x, y, z)
+        pts = _make_points(lats, lons, hts)
+        ecef = geodetic_to_ecef(pts)
+        geo_rt = ecef_to_geodetic(ecef)
+
+        lats_rt = geo_rt[:, 0]
+        lons_rt = geo_rt[:, 1]
+        hts_rt = geo_rt[:, 2]
 
         np.testing.assert_allclose(lats_rt, lats, atol=1e-7,
             err_msg="Latitude round-trip error exceeds 1e-7 degrees")
@@ -145,54 +157,55 @@ class TestGeodeticEcef:
         """ecef_to_geodetic converges correctly at exact pole coordinates.
 
         The Bowring iterative method can be numerically unstable at lat=±90°
-        because cos(lat)→0.  This test verifies convergence within 10 iterations.
+        because cos(lat)->0.  This test verifies convergence within 10 iterations.
         """
         for lat_sign in (+1.0, -1.0):
-            lats, lons, hts = _make_scalar_arrays(lat_sign * 90.0, 0.0, 0.0)
-            x, y, z = geodetic_to_ecef(lats, lons, hts)
-            lats_rt, _, hts_rt = ecef_to_geodetic(x, y, z)
+            pt = _make_point(lat_sign * 90.0, 0.0, 0.0)
+            ecef = geodetic_to_ecef(pt)
+            geo_rt = ecef_to_geodetic(ecef)
 
-            assert abs(float(lats_rt[0]) - lat_sign * 90.0) < 1e-5, (
-                f"Pole round-trip latitude error: {lats_rt[0]:.8f}° (expected ±90°)"
+            assert abs(float(geo_rt[0]) - lat_sign * 90.0) < 1e-5, (
+                f"Pole round-trip latitude error: {geo_rt[0]:.8f} deg (expected +/-90 deg)"
             )
-            assert abs(float(hts_rt[0])) < 1.0, (
-                f"Pole round-trip height error: {hts_rt[0]:.3f} m (expected ~0)"
+            assert abs(float(geo_rt[2])) < 1.0, (
+                f"Pole round-trip height error: {geo_rt[2]:.3f} m (expected ~0)"
             )
 
     def test_round_trip_antimeridian(self):
-        """Round-trip works correctly at lon=±180°."""
+        """Round-trip works correctly at lon=+/-180 deg."""
         for lon in (180.0, -180.0):
-            lats, lons, hts = _make_scalar_arrays(45.0, lon, 100.0)
-            x, y, z = geodetic_to_ecef(lats, lons, hts)
-            lats_rt, lons_rt, hts_rt = ecef_to_geodetic(x, y, z)
+            pt = _make_point(45.0, lon, 100.0)
+            ecef = geodetic_to_ecef(pt)
+            geo_rt = ecef_to_geodetic(ecef)
 
-            assert abs(float(lats_rt[0]) - 45.0) < 1e-7, (
-                f"Anti-meridian lat round-trip error: {lats_rt[0]:.8f}° (input 45°)"
+            assert abs(float(geo_rt[0]) - 45.0) < 1e-7, (
+                f"Anti-meridian lat round-trip error: {geo_rt[0]:.8f} deg (input 45 deg)"
             )
-            assert abs(float(hts_rt[0]) - 100.0) < 1e-3, (
-                f"Anti-meridian height round-trip error: {hts_rt[0]:.3f} m (input 100.0)"
+            assert abs(float(geo_rt[2]) - 100.0) < 1e-3, (
+                f"Anti-meridian height round-trip error: {geo_rt[2]:.3f} m (input 100.0)"
             )
 
     def test_altitude_preserved(self):
         """Height above ellipsoid survives a round-trip for high-altitude points."""
-        lats, lons, hts = _make_scalar_arrays(37.5, -122.0, 500000.0)  # 500 km altitude
-        x, y, z = geodetic_to_ecef(lats, lons, hts)
-        _, _, hts_rt = ecef_to_geodetic(x, y, z)
-        assert abs(float(hts_rt[0]) - 500000.0) < 1.0, (
-            f"High-altitude round-trip height error: {hts_rt[0]:.3f} m (expected 500000)"
+        pt = _make_point(37.5, -122.0, 500000.0)  # 500 km altitude
+        ecef = geodetic_to_ecef(pt)
+        geo_rt = ecef_to_geodetic(ecef)
+        assert abs(float(geo_rt[2]) - 500000.0) < 1.0, (
+            f"High-altitude round-trip height error: {geo_rt[2]:.3f} m (expected 500000)"
         )
 
     def test_vectorized_array_input(self):
-        """Functions accept and return arrays (vectorized, not just scalars)."""
+        """Functions accept and return (N, 3) arrays (vectorized, not just scalars)."""
         lats = np.array([0.0, 45.0, -45.0, 90.0, -90.0])
         lons = np.array([0.0, 90.0, -90.0, 180.0, -180.0])
         hts = np.zeros(5)
 
-        x, y, z = geodetic_to_ecef(lats, lons, hts)
-        assert x.shape == (5,), "geodetic_to_ecef must return arrays of same length as input"
+        pts = _make_points(lats, lons, hts)
+        ecef = geodetic_to_ecef(pts)
+        assert ecef.shape == (5, 3), "geodetic_to_ecef must return (N, 3) array"
 
-        lats_rt, lons_rt, hts_rt = ecef_to_geodetic(x, y, z)
-        assert lats_rt.shape == (5,), "ecef_to_geodetic must return arrays of same length as input"
+        geo_rt = ecef_to_geodetic(ecef)
+        assert geo_rt.shape == (5, 3), "ecef_to_geodetic must return (N, 3) array"
 
 
 # ===========================================================================
@@ -200,12 +213,17 @@ class TestGeodeticEcef:
 # ===========================================================================
 
 class TestGeodeticEnu:
-    """Round-trip and identity tests for geodetic ↔ ENU."""
+    """Round-trip and identity tests for geodetic <-> ENU."""
 
     # Reference point: mid-latitude continental US
     REF_LAT = 39.0
     REF_LON = -96.0
     REF_ALT = 0.0
+
+    @property
+    def ref(self) -> np.ndarray:
+        """Reference point as (3,) array [lat, lon, alt]."""
+        return _make_ref(self.REF_LAT, self.REF_LON, self.REF_ALT)
 
     def test_reference_point_is_enu_origin(self):
         """A point at the reference location maps to ENU (0, 0, 0).
@@ -214,82 +232,66 @@ class TestGeodeticEnu:
         (east=0, north=0, up=0).  Any non-zero result means the
         coordinate system is off-center.
         """
-        lats, lons, hts = _make_scalar_arrays(
-            self.REF_LAT, self.REF_LON, self.REF_ALT
+        pt = _make_point(self.REF_LAT, self.REF_LON, self.REF_ALT)
+        result = geodetic_to_enu(pt, self.ref)
+
+        assert abs(float(result[0])) < 1e-3, (
+            f"ENU east at reference point = {result[0]:.6f} m (expected 0)"
         )
-        east, north, up = geodetic_to_enu(
-            lats, lons, hts,
-            self.REF_LAT, self.REF_LON, self.REF_ALT,
+        assert abs(float(result[1])) < 1e-3, (
+            f"ENU north at reference point = {result[1]:.6f} m (expected 0)"
         )
-        assert abs(float(east[0])) < 1e-3, (
-            f"ENU east at reference point = {east[0]:.6f} m (expected 0)"
-        )
-        assert abs(float(north[0])) < 1e-3, (
-            f"ENU north at reference point = {north[0]:.6f} m (expected 0)"
-        )
-        assert abs(float(up[0])) < 1e-3, (
-            f"ENU up at reference point = {up[0]:.6f} m (expected 0)"
+        assert abs(float(result[2])) < 1e-3, (
+            f"ENU up at reference point = {result[2]:.6f} m (expected 0)"
         )
 
     def test_east_offset_appears_in_east_component(self):
         """A point displaced east has positive east component, near-zero north/up.
 
         Moving ~1 km east in longitude at the reference latitude should
-        produce east ≈ 1000 m and north, up ≪ 1 m.
+        produce east ~ 1000 m and north, up << 1 m.
         """
         # ~1 km east: 1000 m / (111320 * cos(lat)) degrees
         delta_lon = 1000.0 / (111320.0 * np.cos(np.radians(self.REF_LAT)))
-        lats, lons, hts = _make_scalar_arrays(
-            self.REF_LAT, self.REF_LON + delta_lon, 0.0
+        pt = _make_point(self.REF_LAT, self.REF_LON + delta_lon, 0.0)
+        result = geodetic_to_enu(pt, self.ref)
+
+        assert abs(float(result[0]) - 1000.0) < 5.0, (
+            f"East displacement: {result[0]:.2f} m (expected ~1000 m)"
         )
-        east, north, up = geodetic_to_enu(
-            lats, lons, hts,
-            self.REF_LAT, self.REF_LON, self.REF_ALT,
-        )
-        assert abs(float(east[0]) - 1000.0) < 5.0, (
-            f"East displacement: {east[0]:.2f} m (expected ~1000 m)"
-        )
-        assert abs(float(north[0])) < 10.0, (
-            f"North contamination from east displacement: {north[0]:.2f} m"
+        assert abs(float(result[1])) < 10.0, (
+            f"North contamination from east displacement: {result[1]:.2f} m"
         )
 
     def test_north_offset_appears_in_north_component(self):
         """A point displaced north has positive north component, near-zero east/up.
 
-        Moving ~1 km north in latitude should produce north ≈ 1000 m.
+        Moving ~1 km north in latitude should produce north ~ 1000 m.
         """
         delta_lat = 1000.0 / 111320.0  # degrees
-        lats, lons, hts = _make_scalar_arrays(
-            self.REF_LAT + delta_lat, self.REF_LON, 0.0
+        pt = _make_point(self.REF_LAT + delta_lat, self.REF_LON, 0.0)
+        result = geodetic_to_enu(pt, self.ref)
+
+        assert abs(float(result[1]) - 1000.0) < 5.0, (
+            f"North displacement: {result[1]:.2f} m (expected ~1000 m)"
         )
-        east, north, up = geodetic_to_enu(
-            lats, lons, hts,
-            self.REF_LAT, self.REF_LON, self.REF_ALT,
-        )
-        assert abs(float(north[0]) - 1000.0) < 5.0, (
-            f"North displacement: {north[0]:.2f} m (expected ~1000 m)"
-        )
-        assert abs(float(east[0])) < 10.0, (
-            f"East contamination from north displacement: {east[0]:.2f} m"
+        assert abs(float(result[0])) < 10.0, (
+            f"East contamination from north displacement: {result[0]:.2f} m"
         )
 
     def test_up_offset_appears_in_up_component(self):
-        """A point at 1000 m altitude above the reference has up ≈ 1000 m."""
-        lats, lons, hts = _make_scalar_arrays(
-            self.REF_LAT, self.REF_LON, 1000.0
-        )
-        east, north, up = geodetic_to_enu(
-            lats, lons, hts,
-            self.REF_LAT, self.REF_LON, self.REF_ALT,
-        )
-        assert abs(float(up[0]) - 1000.0) < 1.0, (
-            f"Up displacement: {up[0]:.3f} m (expected ~1000 m)"
+        """A point at 1000 m altitude above the reference has up ~ 1000 m."""
+        pt = _make_point(self.REF_LAT, self.REF_LON, 1000.0)
+        result = geodetic_to_enu(pt, self.ref)
+
+        assert abs(float(result[2]) - 1000.0) < 1.0, (
+            f"Up displacement: {result[2]:.3f} m (expected ~1000 m)"
         )
 
     def test_round_trip_nearby_points(self):
-        """geodetic → ENU → geodetic recovers input within 1 mm for nearby points.
+        """geodetic -> ENU -> geodetic recovers input within 1 mm for nearby points.
 
-        Uses offsets of ±100 km max, where the flat-Earth ENU approximation
+        Uses offsets of +/-100 km max, where the flat-Earth ENU approximation
         is highly accurate.
         """
         rng = np.random.default_rng(42)
@@ -298,19 +300,18 @@ class TestGeodeticEnu:
         lons = self.REF_LON + rng.uniform(-0.5, 0.5, 50)
         hts = rng.uniform(-100.0, 1000.0, 50)
 
-        east, north, up = geodetic_to_enu(
-            lats, lons, hts,
-            self.REF_LAT, self.REF_LON, self.REF_ALT,
-        )
-        lats_rt, lons_rt, hts_rt = enu_to_geodetic(
-            east, north, up,
-            self.REF_LAT, self.REF_LON, self.REF_ALT,
-        )
+        pts = _make_points(lats, lons, hts)
+        enu = geodetic_to_enu(pts, self.ref)
+        geo_rt = enu_to_geodetic(enu, self.ref)
+
+        lats_rt = geo_rt[:, 0]
+        lons_rt = geo_rt[:, 1]
+        hts_rt = geo_rt[:, 2]
 
         np.testing.assert_allclose(lats_rt, lats, atol=1e-7,
-            err_msg="Nearby-point ENU→geodetic latitude error > 1e-7°")
+            err_msg="Nearby-point ENU->geodetic latitude error > 1e-7 deg")
         np.testing.assert_allclose(hts_rt, hts, atol=1e-3,
-            err_msg="Nearby-point ENU→geodetic height error > 1 mm")
+            err_msg="Nearby-point ENU->geodetic height error > 1 mm")
 
     def test_round_trip_100km_offset(self):
         """ENU round-trip remains better than 1 cm at 100 km from reference.
@@ -321,43 +322,29 @@ class TestGeodeticEnu:
         """
         # ~100 km north: 100000 m / 111320 m/deg
         delta_lat = 100000.0 / 111320.0
-        lats, lons, hts = _make_scalar_arrays(
-            self.REF_LAT + delta_lat, self.REF_LON, 0.0
-        )
-        east, north, up = geodetic_to_enu(
-            lats, lons, hts,
-            self.REF_LAT, self.REF_LON, self.REF_ALT,
-        )
-        lats_rt, lons_rt, hts_rt = enu_to_geodetic(
-            east, north, up,
-            self.REF_LAT, self.REF_LON, self.REF_ALT,
-        )
+        pt = _make_point(self.REF_LAT + delta_lat, self.REF_LON, 0.0)
+        enu = geodetic_to_enu(pt, self.ref)
+        geo_rt = enu_to_geodetic(enu, self.ref)
 
-        assert abs(float(lats_rt[0]) - float(lats[0])) < 1e-6, (
+        assert abs(float(geo_rt[0]) - (self.REF_LAT + delta_lat)) < 1e-6, (
             f"100 km offset round-trip lat error: "
-            f"{abs(float(lats_rt[0]) - float(lats[0])):.2e}° "
-            f"(threshold 1e-6°)"
+            f"{abs(float(geo_rt[0]) - (self.REF_LAT + delta_lat)):.2e} deg "
+            f"(threshold 1e-6 deg)"
         )
-        assert abs(float(hts_rt[0]) - float(hts[0])) < 0.01, (
+        assert abs(float(geo_rt[2]) - 0.0) < 0.01, (
             f"100 km offset round-trip height error: "
-            f"{abs(float(hts_rt[0]) - float(hts[0])):.4f} m (threshold 0.01 m)"
+            f"{abs(float(geo_rt[2])):.4f} m (threshold 0.01 m)"
         )
 
     def test_vectorized_enu_returns_correct_shape(self):
-        """geodetic_to_enu and enu_to_geodetic process arrays without shape errors."""
+        """geodetic_to_enu and enu_to_geodetic process (N, 3) arrays without shape errors."""
         lats = np.linspace(38.0, 40.0, 20)
         lons = np.linspace(-97.0, -95.0, 20)
         hts = np.zeros(20)
 
-        east, north, up = geodetic_to_enu(
-            lats, lons, hts,
-            self.REF_LAT, self.REF_LON, self.REF_ALT,
-        )
-        assert east.shape == (20,), "ENU east array shape mismatch"
-        assert north.shape == (20,), "ENU north array shape mismatch"
+        pts = _make_points(lats, lons, hts)
+        enu = geodetic_to_enu(pts, self.ref)
+        assert enu.shape == (20, 3), "ENU result array shape mismatch"
 
-        lats_rt, lons_rt, hts_rt = enu_to_geodetic(
-            east, north, up,
-            self.REF_LAT, self.REF_LON, self.REF_ALT,
-        )
-        assert lats_rt.shape == (20,), "Recovered lats array shape mismatch"
+        geo_rt = enu_to_geodetic(enu, self.ref)
+        assert geo_rt.shape == (20, 3), "Recovered geodetic array shape mismatch"

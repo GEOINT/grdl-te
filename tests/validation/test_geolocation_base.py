@@ -31,7 +31,7 @@ Created
 
 Modified
 --------
-2026-02-12
+2026-03-30
 """
 
 # Standard library
@@ -156,56 +156,56 @@ class TestGeolocationDispatch:
 
     # -- image_to_latlon --
 
-    def test_scalar_input_returns_tuple_of_floats(self, geo):
+    def test_scalar_input_returns_ndarray(self, geo):
         result = geo.image_to_latlon(100.0, 200.0)
-        assert isinstance(result, tuple)
-        assert len(result) == 3
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (3,)
         lat, lon, h = result
-        assert isinstance(lat, float)
-        assert isinstance(lon, float)
-        assert isinstance(h, float)
         assert lat == pytest.approx(100.0, abs=1e-12)
         assert lon == pytest.approx(200.0, abs=1e-12)
 
     def test_scalar_int_input(self, geo):
         """Python int inputs should dispatch as scalar."""
-        lat, lon, h = geo.image_to_latlon(50, 75)
-        assert isinstance(lat, float)
+        result = geo.image_to_latlon(50, 75)
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (3,)
+        lat, lon, h = result
         assert lat == pytest.approx(50.0, abs=1e-12)
         assert lon == pytest.approx(75.0, abs=1e-12)
 
-    def test_array_input_returns_tuple_of_arrays(self, geo):
+    def test_array_input_returns_Nx3_array(self, geo):
         rows = np.array([0.0, 100.0, 500.0])
         cols = np.array([0.0, 200.0, 1000.0])
-        lats, lons, heights = geo.image_to_latlon(rows, cols)
+        result = geo.image_to_latlon(rows, cols)
 
-        assert isinstance(lats, np.ndarray)
-        assert isinstance(lons, np.ndarray)
-        assert isinstance(heights, np.ndarray)
-        np.testing.assert_allclose(lats, rows, atol=1e-12)
-        np.testing.assert_allclose(lons, cols, atol=1e-12)
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (3, 3)
+        np.testing.assert_allclose(result[:, 0], rows, atol=1e-12)
+        np.testing.assert_allclose(result[:, 1], cols, atol=1e-12)
 
-    def test_list_input_returns_arrays(self, geo):
+    def test_list_input_returns_Nx3_array(self, geo):
         """Python list inputs should dispatch as array."""
-        lats, lons, heights = geo.image_to_latlon([10.0, 20.0], [30.0, 40.0])
-        assert isinstance(lats, np.ndarray)
-        np.testing.assert_allclose(lats, [10.0, 20.0], atol=1e-12)
-        np.testing.assert_allclose(lons, [30.0, 40.0], atol=1e-12)
+        result = geo.image_to_latlon([10.0, 20.0], [30.0, 40.0])
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (2, 3)
+        np.testing.assert_allclose(result[:, 0], [10.0, 20.0], atol=1e-12)
+        np.testing.assert_allclose(result[:, 1], [30.0, 40.0], atol=1e-12)
 
-    def test_stacked_2xN_input_returns_3xN(self, geo):
-        points = np.array([[10.0, 20.0, 30.0],
-                           [40.0, 50.0, 60.0]])
+    def test_stacked_Nx2_input_returns_Nx3(self, geo):
+        points = np.array([[10.0, 40.0],
+                           [20.0, 50.0],
+                           [30.0, 60.0]])
         result = geo.image_to_latlon(points)
 
         assert isinstance(result, np.ndarray)
         assert result.shape == (3, 3)
-        np.testing.assert_allclose(result[0], [10.0, 20.0, 30.0], atol=1e-12)
-        np.testing.assert_allclose(result[1], [40.0, 50.0, 60.0], atol=1e-12)
+        np.testing.assert_allclose(result[:, 0], [10.0, 20.0, 30.0], atol=1e-12)
+        np.testing.assert_allclose(result[:, 1], [40.0, 50.0, 60.0], atol=1e-12)
 
     def test_stacked_invalid_shape_raises(self, geo):
-        """Non-(2, N) stacked array must raise ValueError."""
-        with pytest.raises(ValueError, match="Expected \\(2, N\\)"):
-            geo.image_to_latlon(np.array([[1.0, 2.0, 3.0]]))
+        """Stacked array with fewer than 2 columns must raise ValueError."""
+        with pytest.raises(ValueError, match="Expected \\(N, 2\\)"):
+            geo.image_to_latlon(np.array([[1.0]]))
 
     def test_height_passthrough(self, geo):
         """Height argument should propagate to output."""
@@ -214,29 +214,32 @@ class TestGeolocationDispatch:
 
     # -- latlon_to_image --
 
-    def test_latlon_scalar_returns_floats(self, geo):
-        row, col = geo.latlon_to_image(10.0, 20.0)
-        assert isinstance(row, float)
-        assert isinstance(col, float)
+    def test_latlon_scalar_returns_ndarray(self, geo):
+        result = geo.latlon_to_image(10.0, 20.0)
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (2,)
+        row, col = result
         assert row == pytest.approx(10.0, abs=1e-12)
         assert col == pytest.approx(20.0, abs=1e-12)
 
-    def test_latlon_array_returns_arrays(self, geo):
-        rows, cols = geo.latlon_to_image(
+    def test_latlon_array_returns_Nx2_array(self, geo):
+        result = geo.latlon_to_image(
             np.array([10.0, 20.0]), np.array([30.0, 40.0])
         )
-        assert isinstance(rows, np.ndarray)
-        np.testing.assert_allclose(rows, [10.0, 20.0], atol=1e-12)
-        np.testing.assert_allclose(cols, [30.0, 40.0], atol=1e-12)
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (2, 2)
+        np.testing.assert_allclose(result[:, 0], [10.0, 20.0], atol=1e-12)
+        np.testing.assert_allclose(result[:, 1], [30.0, 40.0], atol=1e-12)
 
-    def test_latlon_stacked_returns_2xN(self, geo):
-        coords = np.array([[10.0, 20.0], [30.0, 40.0]])
+    def test_latlon_stacked_returns_Nx2(self, geo):
+        coords = np.array([[10.0, 30.0], [20.0, 40.0]])
         result = geo.latlon_to_image(coords)
         assert result.shape == (2, 2)
 
     def test_latlon_stacked_invalid_raises(self, geo):
-        with pytest.raises(ValueError, match="Expected \\(2, N\\)"):
-            geo.latlon_to_image(np.array([1.0, 2.0, 3.0]))
+        """Stacked array with fewer than 2 columns must raise ValueError."""
+        with pytest.raises(ValueError, match="Expected \\(N, 2\\)"):
+            geo.latlon_to_image(np.array([[1.0]]))
 
     # -- Round-trip --
 
@@ -251,8 +254,10 @@ class TestGeolocationDispatch:
         rows = np.array([0.0, 250.0, 500.0, 999.0])
         cols = np.array([0.0, 500.0, 1000.0, 1999.0])
 
-        lats, lons, _ = geo.image_to_latlon(rows, cols)
-        rows_back, cols_back = geo.latlon_to_image(lats, lons)
+        fwd = geo.image_to_latlon(rows, cols)
+        lats, lons = fwd[:, 0], fwd[:, 1]
+        inv = geo.latlon_to_image(lats, lons)
+        rows_back, cols_back = inv[:, 0], inv[:, 1]
 
         np.testing.assert_allclose(rows_back, rows, atol=1e-12)
         np.testing.assert_allclose(cols_back, cols, atol=1e-12)
@@ -405,8 +410,10 @@ class TestAffineGeolocationEPSG4326:
         rows = rng.uniform(0, 999, 100)
         cols = rng.uniform(0, 999, 100)
 
-        lats, lons, _ = geo_4326.image_to_latlon(rows, cols)
-        rows_back, cols_back = geo_4326.latlon_to_image(lats, lons)
+        fwd = geo_4326.image_to_latlon(rows, cols)
+        lats, lons = fwd[:, 0], fwd[:, 1]
+        inv = geo_4326.latlon_to_image(lats, lons)
+        rows_back, cols_back = inv[:, 0], inv[:, 1]
 
         np.testing.assert_allclose(rows_back, rows, atol=1e-12)
         np.testing.assert_allclose(cols_back, cols, atol=1e-12)
@@ -470,8 +477,10 @@ class TestAffineGeolocationUTM:
         rows = rng.uniform(0, 999, 200)
         cols = rng.uniform(0, 999, 200)
 
-        lats, lons, _ = geo_utm.image_to_latlon(rows, cols)
-        rows_back, cols_back = geo_utm.latlon_to_image(lats, lons)
+        fwd = geo_utm.image_to_latlon(rows, cols)
+        lats, lons = fwd[:, 0], fwd[:, 1]
+        inv = geo_utm.latlon_to_image(lats, lons)
+        rows_back, cols_back = inv[:, 0], inv[:, 1]
 
         np.testing.assert_allclose(rows_back, rows, atol=1e-4)
         np.testing.assert_allclose(cols_back, cols, atol=1e-4)
@@ -539,19 +548,20 @@ class TestAffineGeolocationEdgeCases:
         assert col_back == pytest.approx(0.0, abs=1e-4)
 
     def test_stacked_array_dispatch(self):
-        """Verify (2, N) stacked-array dispatch works with AffineGeolocation."""
+        """Verify (N, 2) stacked-array dispatch works with AffineGeolocation."""
         transform = Affine(0.001, 0.0, -118.0,
                            0.0, -0.001, 35.0)
         geo = AffineGeolocation(transform, (500, 500), 'EPSG:4326')
 
-        points = np.array([[0.0, 100.0, 499.0],
-                           [0.0, 100.0, 499.0]])
+        points = np.array([[0.0, 0.0],
+                           [100.0, 100.0],
+                           [499.0, 499.0]])
         result = geo.image_to_latlon(points)
 
         assert result.shape == (3, 3)
-        # First row = lats, second = lons, third = heights
+        # Columns: [lat, lon, height]
         assert result[0, 0] == pytest.approx(35.0, abs=1e-12)
-        assert result[1, 0] == pytest.approx(-118.0, abs=1e-12)
+        assert result[0, 1] == pytest.approx(-118.0, abs=1e-12)
 
     def test_height_propagation(self):
         """Custom height argument propagates to output."""

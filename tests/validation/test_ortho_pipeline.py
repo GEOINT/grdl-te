@@ -418,13 +418,18 @@ class TestComputeOutputResolution:
         When the CRS is geographic the resolution is already in degrees and
         must be passed through without any metres-to-degrees conversion.
         """
+        from grdl.IO.models import ImageMetadata
         resolution_deg = (0.00027, 0.00027)
         result = compute_output_resolution(
-            metadata={
-                'transform': True,          # non-None triggers GeoTIFF dispatch
-                'resolution': resolution_deg,
-                'crs': 'EPSG:4326',
-            },
+            metadata=ImageMetadata(
+                format='GeoTIFF',
+                rows=1000,
+                cols=1000,
+                dtype='float32',
+                transform=True,             # non-None triggers GeoTIFF dispatch
+                pixel_resolution=resolution_deg,
+                crs='EPSG:4326',
+            ),
         )
         assert result[0] == pytest.approx(resolution_deg[0], rel=1e-5), (
             f"Geographic GeoTIFF lat resolution {result[0]:.6f}° != "

@@ -3,7 +3,7 @@ name = "grdl-te"
 version = "0.1.0"
 description = "Testing and Evaluation suite for GRDL library using real-world data"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
     {name = "Steven Siebert"},
@@ -32,7 +32,7 @@ dev = [
 ]
 
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]

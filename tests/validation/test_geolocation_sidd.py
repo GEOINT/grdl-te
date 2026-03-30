@@ -217,19 +217,21 @@ class TestSIDDGeolocationPlaneProjection:
         ]
         for row_in, col_in in test_pixels:
             lat, lon, h = pgd_geo.image_to_latlon(row_in, col_in)
-            row_out, col_out = pgd_geo.latlon_to_image(
+            result = pgd_geo.latlon_to_image(
                 np.array([float(lat)]),
                 np.array([float(lon)]),
                 height=np.array([float(h)]),
             )
-            assert abs(float(row_out[0]) - row_in) < 0.5, (
+            row_out = result[0, 0]
+            col_out = result[0, 1]
+            assert abs(float(row_out) - row_in) < 0.5, (
                 f"PlaneProjection round-trip row error "
-                f"{abs(float(row_out[0]) - row_in):.4f} px at pixel ({row_in}, {col_in}) "
+                f"{abs(float(row_out) - row_in):.4f} px at pixel ({row_in}, {col_in}) "
                 f"exceeds 0.5 px threshold"
             )
-            assert abs(float(col_out[0]) - col_in) < 0.5, (
+            assert abs(float(col_out) - col_in) < 0.5, (
                 f"PlaneProjection round-trip col error "
-                f"{abs(float(col_out[0]) - col_in):.4f} px at pixel ({row_in}, {col_in}) "
+                f"{abs(float(col_out) - col_in):.4f} px at pixel ({row_in}, {col_in}) "
                 f"exceeds 0.5 px threshold"
             )
 
@@ -237,10 +239,15 @@ class TestSIDDGeolocationPlaneProjection:
         """Vectorized image_to_latlon / latlon_to_image produces correct shapes."""
         rows = np.array([0.0, 250.0, 500.0, 750.0, 999.0])
         cols = np.array([0.0, 250.0, 500.0, 750.0, 999.0])
-        lats, lons, heights = pgd_geo.image_to_latlon(rows, cols)
+        result_ll = pgd_geo.image_to_latlon(rows, cols)
+        lats = result_ll[:, 0]
+        lons = result_ll[:, 1]
+        heights = result_ll[:, 2]
         assert lats.shape == (5,), f"lats shape {lats.shape} != (5,)"
 
-        rows_rt, cols_rt = pgd_geo.latlon_to_image(lats, lons, height=heights)
+        result_rt = pgd_geo.latlon_to_image(lats, lons, height=heights)
+        rows_rt = result_rt[:, 0]
+        cols_rt = result_rt[:, 1]
         np.testing.assert_allclose(rows_rt, rows, atol=0.5,
             err_msg="Vectorized PGD round-trip row error > 0.5 px")
         np.testing.assert_allclose(cols_rt, cols, atol=0.5,
@@ -282,15 +289,17 @@ class TestSIDDGeolocationGeographicProjection:
         """
         row_in, col_in = 100.0, 400.0
         lat, lon, h = ggd_geo.image_to_latlon(row_in, col_in)
-        row_out, col_out = ggd_geo.latlon_to_image(
+        result = ggd_geo.latlon_to_image(
             np.array([float(lat)]),
             np.array([float(lon)]),
         )
-        assert abs(float(row_out[0]) - row_in) < 0.01, (
-            f"GGD round-trip row error {abs(float(row_out[0]) - row_in):.6f} px > 0.01 px"
+        row_out = result[0, 0]
+        col_out = result[0, 1]
+        assert abs(float(row_out) - row_in) < 0.01, (
+            f"GGD round-trip row error {abs(float(row_out) - row_in):.6f} px > 0.01 px"
         )
-        assert abs(float(col_out[0]) - col_in) < 0.01, (
-            f"GGD round-trip col error {abs(float(col_out[0]) - col_in):.6f} px > 0.01 px"
+        assert abs(float(col_out) - col_in) < 0.01, (
+            f"GGD round-trip col error {abs(float(col_out) - col_in):.6f} px > 0.01 px"
         )
 
     def test_north_row_less_than_south_row(self, ggd_geo):
@@ -392,20 +401,22 @@ class TestSIDDGeolocationRealData:
             col_c = cols / 2.0
 
             lat, lon, h = geo.image_to_latlon(row_c, col_c)
-            row_rt, col_rt = geo.latlon_to_image(
+            result_rt = geo.latlon_to_image(
                 np.array([float(lat)]),
                 np.array([float(lon)]),
                 height=np.array([float(h)]),
             )
+            row_rt = result_rt[0, 0]
+            col_rt = result_rt[0, 1]
 
-        assert abs(float(row_rt[0]) - row_c) < 0.5, (
+        assert abs(float(row_rt) - row_c) < 0.5, (
             f"Center pixel row round-trip error "
-            f"{abs(float(row_rt[0]) - row_c):.4f} px > 0.5 px — "
+            f"{abs(float(row_rt) - row_c):.4f} px > 0.5 px — "
             f"coordinate refactor may have broken SIDD geolocation"
         )
-        assert abs(float(col_rt[0]) - col_c) < 0.5, (
+        assert abs(float(col_rt) - col_c) < 0.5, (
             f"Center pixel col round-trip error "
-            f"{abs(float(col_rt[0]) - col_c):.4f} px > 0.5 px"
+            f"{abs(float(col_rt) - col_c):.4f} px > 0.5 px"
         )
 
     def test_geolocation_returns_plausible_coordinates(self, require_sidd_file):

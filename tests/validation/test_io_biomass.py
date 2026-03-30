@@ -33,7 +33,7 @@ except ImportError:
     _HAS_BIOMASS = False
 
 try:
-    from grdl.IO.sar import BIOMASSCatalog
+    from grdl.IO.catalog import BIOMASSCatalog
     _HAS_CATALOG = True
 except ImportError:
     _HAS_CATALOG = False

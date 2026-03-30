@@ -29,7 +29,7 @@ Created
 
 Modified
 --------
-2026-03-20
+2026-03-30
 """
 
 # Third-party
@@ -145,10 +145,15 @@ class TestRPCLevel1:
         """Array lat/lon input returns array (rows, cols) output."""
         lats = np.array([36.98, 37.0, 37.02])
         lons = np.array([-122.02, -122.0, -121.98])
-        rows, cols = rpc_geolocation.latlon_to_image(lats, lons, 100.0)
-        assert isinstance(rows, np.ndarray), (
-            f"Expected ndarray rows, got {type(rows)}"
+        result = rpc_geolocation.latlon_to_image(lats, lons, 100.0)
+        assert isinstance(result, np.ndarray), (
+            f"Expected ndarray, got {type(result)}"
         )
+        assert result.shape == (3, 2), (
+            f"Expected shape (3, 2), got {result.shape}"
+        )
+        rows = result[:, 0]
+        cols = result[:, 1]
         assert len(rows) == 3
 
     def test_rpc_image_to_latlon_scalar(self, rpc_geolocation):
@@ -247,8 +252,11 @@ class TestRPCLevel3:
         lat_s, lon_s, h_s = rpc_geolocation.image_to_latlon(
             2048.0, 2048.0, 100.0
         )
-        lats_a, lons_a, hs_a = rpc_geolocation.image_to_latlon(
+        result_a = rpc_geolocation.image_to_latlon(
             np.array([2048.0]), np.array([2048.0]), 100.0
         )
-        assert abs(lat_s - lats_a[0]) < 1e-10
-        assert abs(lon_s - lons_a[0]) < 1e-10
+        assert result_a.shape == (1, 3), (
+            f"Expected shape (1, 3), got {result_a.shape}"
+        )
+        assert abs(lat_s - result_a[0, 0]) < 1e-10
+        assert abs(lon_s - result_a[0, 1]) < 1e-10
