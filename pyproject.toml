@@ -88,6 +88,13 @@ markers = [
 [tool.setuptools.packages.find]
 include = ["grdl_te*"]
 
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.data-files]
+"share/grdl-te" = ["README.md", "LICENSE"]
+"share/grdl-te/docs" = ["docs/benchmarking-guide.md"]
+
 [tool.coverage.run]
 source = ["grdl"]
 omit = [
