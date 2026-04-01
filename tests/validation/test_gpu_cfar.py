@@ -52,7 +52,11 @@ import pytest
 
 try:
     import cupy as cp
-    cp.array([1.0])  # verify GPU is actually functional
+    # Verify GPU allocation *and* that nvrtc (JIT compiler) is present.
+    # cp.array() alone only tests memory allocation; ndimage filters and
+    # custom kernels require the NVIDIA runtime compiler to be available.
+    cp.array([1.0])
+    cp.cuda.nvrtc.getVersion()
     _HAS_CUPY = True
 except Exception:
     _HAS_CUPY = False

@@ -182,6 +182,7 @@ class TestNumpyWriterLevel2:
             loaded = np.load(str(npz_path))
             np.testing.assert_allclose(loaded['a'], arr1)
             np.testing.assert_allclose(loaded['b'], arr2)
+            loaded.close()  # release file handle before tmpdir cleanup
 
     @pytest.mark.skipif(not _HAS_METADATA,
                         reason="grdl ImageMetadata not available")
@@ -292,6 +293,7 @@ class TestPngWriterLevel2:
             img = PILImage.open(str(path))
             # PIL size is (width, height) = (cols, rows)
             assert img.size == (64, 48)
+            img.close()  # release file handle before tmpdir cleanup
 
     def test_png_write_constant_float_all_zeros(self):
         """Constant float array: dmax-dmin == 0, so output is all zeros."""
