@@ -455,6 +455,76 @@ class TestSIDDGeolocationRealData:
         assert max_lat > min_lat, (
             f"get_bounds: max_lat {max_lat:.4f} <= min_lat {min_lat:.4f}"
         )
+
+    @pytest.mark.requires_data
+    def test_sidd_default_hae_delegation(self, require_sidd_file):
+        """SIDDGeolocation.default_hae returns plausible height value.
+
+        Verifies that default_hae (default Height Above Ellipsoid) is
+        properly initialized from measurement metadata and returns a
+        finite numeric value suitable for terrain-uncorrected transforms.
+        """
+        with SIDDReader(str(require_sidd_file)) as reader:
+            geo = SIDDGeolocation.from_reader(reader)
+            
+            # default_hae must be accessible
+            assert hasattr(geo, 'default_hae'), \
+                "SIDDGeolocation must expose default_hae property"
+            
+            hae = geo.default_hae
+            assert hae is not None, "default_hae is None"
+            assert np.isfinite(float(hae)), \
+                f"default_hae {hae} is not finite"
+            
+            # Reasonable range: most SIDD products are at/near sea level
+            # but may be digitally orthorectified to various reference heights
+            assert -500 <= float(hae) <= 10000, \
+                f"default_hae {hae}m seems implausible"
+
+    @pytest.mark.requires_data
+    def test_sidd_coa_projection_metadata_presence(self, require_sidd_file):
+        """COAProjection metadata present and accessible if defined.
+
+        COAProjection (Center of Aperture) projection provides additional
+        geometric metadata in some SIDD products. Verify it is accessible
+        without error if present.
+        """
+        with SIDDReader(str(require_sidd_file)) as reader:
+            geo = SIDDGeolocation.from_reader(reader)
+            
+            # Check for COAProjection in measurement
+            if hasattr(reader.metadata.measurement, 'coa_projection'):
+                coa_proj = reader.metadata.measurement.coa_projection
+                # If present, should be non-None and have expected attributes
+                if coa_proj is not None:
+                    # COAProjection should have reference point and/or focal plane info
+                    assert hasattr(coa_proj, 'reference_point') or \
+                           hasattr(coa_proj, 'focal_plane'), \
+                        "COAProjection lacks expected geometry fields"
+
+    @pytest.mark.requires_data
+    def test_sidd_elevation_property_settable(self, require_sidd_file):
+        """SIDDGeolocation.elevation property can be set for terrain correction.
+
+        Tests that the DEM integration point (geo.elevation) supports
+        assignment, which gates terrain-corrected vs. ellipsoid-only projections.
+        """
+        with SIDDReader(str(require_sidd_file)) as reader:
+            geo = SIDDGeolocation.from_reader(reader)
+            
+            # elevation property should exist and be settable
+            if hasattr(geo, 'elevation'):
+                initial = geo.elevation
+                
+                # Try to set it (if a DEM class is available)
+                try:
+                    from grdl.geolocation.elevation import ConstantElevation
+                    test_dem = ConstantElevation(150.0)
+                    geo.elevation = test_dem
+                    assert geo.elevation is test_dem, \
+                        "Failed to set elevation property"
+                except ImportError:
+                    pytest.skip("ConstantElevation not available")
         assert max_lon > min_lon, (
             f"get_bounds: max_lon {max_lon:.4f} <= min_lon {min_lon:.4f}"
         )

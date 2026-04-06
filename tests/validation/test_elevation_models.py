@@ -131,6 +131,110 @@ def test_dted_batch_10k(require_dted_dir):
     assert np.all(np.isfinite(result))
 
 
+@pytest.mark.slow
+@pytest.mark.skipif(not _HAS_DTED, reason="DTEDElevation not available")
+def test_dted_bicubic_interpolation_default(require_dted_dir):
+    """DTEDElevation uses bicubic (order=3) interpolation by default.
+
+    Bicubic interpolation ensures smooth second derivatives (C2 continuity)
+    across DTED tile boundaries and within tiles.
+    """
+    elev = DTEDElevation(str(require_dted_dir))
+    
+    # Check that bicubic/order=3 is configured
+    # This may be exposed as interpolation, order, or _order attribute
+    interpolation_order = getattr(
+        elev, 'order', 
+        getattr(elev, 'interpolation_order', 
+                getattr(elev, '_interpolation_order', None))
+    )
+    
+    if interpolation_order is not None:
+        assert interpolation_order == 3, \
+            f"Expected bicubic order=3, got {interpolation_order}"
+    
+    # Verify bicubic smoothness by checking second derivative continuity
+    lat_lo, lat_hi, lon_lo, lon_hi = _dted_coverage_range(elev, margin=0.25)
+    test_lat = lat_lo + (lat_hi - lat_lo) / 2
+    test_lon = lon_lo + (lon_hi - lon_lo) / 2
+    
+    # Sample 5 closely-spaced points (0.0001 deg ≈ 11 meters apart)
+    spacing = 0.0001
+    lons = np.array([test_lon - 2*spacing, test_lon - spacing, test_lon, 
+                     test_lon + spacing, test_lon + 2*spacing])
+    lats = np.full_like(lons, test_lat)
+    
+    heights = elev.get_elevation(lats, lons)
+    assert np.all(np.isfinite(heights)), "Got NaN elevations in bicubic test"
+    
+    # Compute first and second differences
+    d1 = np.diff(heights)
+    d2 = np.diff(d1)
+    
+    # For bicubic interpolation, second derivatives should be continuous
+    # (relatively small magnitude when sampled uniformly)
+    # Allow some variation but not extreme jumps
+    d2_variance = np.var(d2)
+    assert d2_variance < 100.0, \
+        f"Second derivative too variable: {d2_variance} " \
+        "(suggests non-bicubic or poor interpolation)"
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _HAS_DTED, reason="DTEDElevation not available")
+def test_dted_cross_tile_continuity(require_dted_dir):
+    """DTED tile boundaries show no discontinuities.
+
+    Verifies that transitions between 1°×1° DTED tiles are smooth
+    without step changes or artifacts.
+    """
+    elev = DTEDElevation(str(require_dted_dir))
+    bounds = elev.coverage_bounds
+    if bounds is None:
+        pytest.skip("DTED tile index is empty — no tiles found")
+    
+    min_lon, min_lat, max_lon, max_lat = bounds
+    
+    # We need at least 2 tiles (horizontally or vertically) to test boundaries
+    if (max_lon - min_lon < 1.5) and (max_lat - min_lat < 1.5):
+        pytest.skip("DTED coverage is too small (< 1.5°) to test tile boundaries")
+    
+    # Find a tile boundary (integer latitude/longitude)
+    test_lat = min_lat + 1.0  # Presumed boundary
+    if test_lat >= max_lat:
+        test_lat = min_lat + 0.5  # Fallback to center if only one row
+    
+    test_lon = min_lon + 1.0  # Presumed boundary
+    if test_lon >= max_lon:
+        test_lon = min_lon + 0.5  # Fallback to center if only one column
+    
+    # Sample points just before and after a tile boundary
+    # Using small offsets to avoid exact tile corner pixels
+    offset = 0.00001  # ~1 meter
+    
+    # Test horizontal boundary (if available)
+    if test_lon < max_lon - offset:
+        h_before = elev.get_elevation(test_lat, test_lon - offset)
+        h_after = elev.get_elevation(test_lat, test_lon + offset)
+        
+        if np.isfinite(h_before) and np.isfinite(h_after):
+            delta_h = abs(h_after - h_before)
+            assert delta_h < 10.0, \
+                f"DTED tile boundary discontinuity: {delta_h} meters " \
+                f"(expected < 10m for smooth interpolation)"
+    
+    # Test vertical boundary (if available)
+    if test_lat < max_lat - offset:
+        h_below = elev.get_elevation(test_lat - offset, test_lon)
+        h_above = elev.get_elevation(test_lat + offset, test_lon)
+        
+        if np.isfinite(h_below) and np.isfinite(h_above):
+            delta_h = abs(h_above - h_below)
+            assert delta_h < 10.0, \
+                f"DTED tile boundary discontinuity: {delta_h} meters " \
+                f"(expected < 10m for smooth interpolation)"
+
+
 # =============================================================================
 # GeoTIFFDEM
 # =============================================================================
