@@ -525,6 +525,10 @@ class TestSIDDGeolocationRealData:
                         "Failed to set elevation property"
                 except ImportError:
                     pytest.skip("ConstantElevation not available")
+            
+            # Re-query bounds after setting elevation
+            min_lon, min_lat, max_lon, max_lat = geo.get_bounds()
+        
         assert max_lon > min_lon, (
             f"get_bounds: max_lon {max_lon:.4f} <= min_lon {min_lon:.4f}"
         )

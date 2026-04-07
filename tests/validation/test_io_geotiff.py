@@ -281,9 +281,9 @@ def test_landsat_bounds_validation(require_landsat_file):
     with GeoTIFFReader(str(require_landsat_file)) as reader:
         metadata = reader.metadata
 
-        # Check bounds exist
-        assert 'bounds' in metadata.extras
-        bounds = metadata.extras['bounds']
+        # Check bounds exist (now directly on metadata object in v0.4.0)
+        assert hasattr(metadata, 'bounds'), "metadata should have bounds attribute"
+        bounds = metadata.bounds
         assert len(bounds) == 4  # (left, bottom, right, top)
 
         left, bottom, right, top = bounds
@@ -292,9 +292,9 @@ def test_landsat_bounds_validation(require_landsat_file):
 
         print(f"Landsat bounds: ({left:.2f}, {bottom:.2f}, {right:.2f}, {top:.2f})")
 
-        # Check transform exists
-        assert 'transform' in metadata.extras
-        transform = metadata.extras['transform']
+        # Check transform exists (now directly on metadata object in v0.4.0)
+        assert hasattr(metadata, 'transform'), "metadata should have transform attribute"
+        transform = metadata.transform
 
         # Use transform to map pixel to coordinates
         rows, cols = reader.get_shape()[:2]

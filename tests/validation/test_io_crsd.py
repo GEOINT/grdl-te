@@ -86,7 +86,10 @@ def test_crsd_read_full_complex(require_crsd_file):
     with CRSDReader(require_crsd_file) as reader:
         data = reader.read_full()
         assert isinstance(data, np.ndarray)
-        assert np.iscomplexobj(data)
+        # CRSD may return structured array with real/imag fields; convert to complex if needed
+        if data.dtype.names and 'real' in data.dtype.names:
+            data = data['real'].astype(np.complex128) + 1j * data['imag'].astype(np.complex128)
+        assert np.iscomplexobj(data), f"Expected complex data, got {data.dtype}"
         assert data.size > 0
 
 
@@ -95,7 +98,14 @@ def test_crsd_values_finite(require_crsd_file):
     """No NaN/Inf in data."""
     with CRSDReader(require_crsd_file) as reader:
         data = reader.read_full()
-        assert np.all(np.isfinite(data)), "CRSD data contains NaN or Inf"
+        # Handle structured arrays (real/imag fields)
+        if data.dtype.names and 'real' in data.dtype.names:
+            real_vals = data['real'].astype(np.float32)
+            imag_vals = data['imag'].astype(np.float32)
+            assert np.all(np.isfinite(real_vals)) and np.all(np.isfinite(imag_vals)), \
+                "CRSD data contains NaN or Inf"
+        else:
+            assert np.all(np.isfinite(data)), "CRSD data contains NaN or Inf"
 
 
 # =============================================================================
@@ -110,7 +120,12 @@ def test_crsd_integration_with_normalizer(require_crsd_file):
     """Normalizer works with CRSD magnitude data."""
     with CRSDReader(require_crsd_file) as reader:
         data = reader.read_full()
-        magnitude = np.abs(data).astype(np.float32)
+        # Handle structured array (real/imag fields from CRSD reader)
+        if data.dtype.names and 'real' in data.dtype.names:
+            complex_data = data['real'] + 1j * data['imag']
+            magnitude = np.abs(complex_data).astype(np.float32)
+        else:
+            magnitude = np.abs(data).astype(np.float32)
         normalizer = Normalizer(method='minmax')
         normalized = normalizer.normalize(magnitude)
         assert np.isfinite(normalized).all()

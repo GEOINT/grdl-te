@@ -49,10 +49,17 @@ import pytest
 
 try:
     import cupy as cp
-    # Verify GPU allocation *and* that nvrtc (JIT compiler) is present.
-    cp.array([1.0])
-    cp.cuda.nvrtc.getVersion()
-    _HAS_CUPY = True
+    # Most robust check: verify GPU + FFT libraries are functional
+    _HAS_CUPY = False
+    try:
+        cp.cuda.runtime.getDeviceCount()  # will raise if CUDA unavailable
+        test_arr = cp.array([1.0, 0.0], dtype=cp.complex64)
+        # Test FFT specifically -- libcufft may be missing even if GPU is present
+        cp.fft.fft(test_arr)
+        _HAS_CUPY = True
+    except (AttributeError, RuntimeError, ImportError, Exception):
+        # CUDA libraries missing (libcufft), GPU not present, or other failure
+        _HAS_CUPY = False
 except Exception:
     _HAS_CUPY = False
 

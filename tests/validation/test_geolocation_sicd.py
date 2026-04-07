@@ -153,11 +153,16 @@ def test_sicd_vectorized(require_umbra_file):
         test_rows = np.array([rows // 4, rows // 2, 3 * rows // 4], dtype=np.float64)
         test_cols = np.array([cols // 4, cols // 2, 3 * cols // 4], dtype=np.float64)
 
-        lats, lons, haes = geo.image_to_latlon(test_rows, test_cols)
+        geo_result = geo.image_to_latlon(test_rows, test_cols)
+        # Result is (n, 3) array with [lat, lon, altitude]
+        assert geo_result.shape[1] == 3, f"Expected (N, 3) result, got {geo_result.shape}"
+        lats = geo_result[:, 0]
+        lons = geo_result[:, 1]
         assert isinstance(lats, np.ndarray)
         assert len(lats) == 3
         assert np.all(np.isfinite(lats))
         assert np.all((-90 <= lats) & (lats <= 90))
+        assert np.all((-180 <= lons) & (lons <= 180))
 
 
 # =============================================================================

@@ -177,8 +177,12 @@ def test_affine_round_trip_all_corners(require_landsat_file):
         rows = test_pixels[:, 0]
         cols = test_pixels[:, 1]
 
-        lats, lons, _ = geo.image_to_latlon(rows, cols)
-        rows_back, cols_back = geo.latlon_to_image(lats, lons)
+        geo_result = geo.image_to_latlon(rows, cols)
+        lats = geo_result[:, 0]
+        lons = geo_result[:, 1]
+        back_result = geo.latlon_to_image(lats, lons)
+        rows_back = back_result[:, 0]
+        cols_back = back_result[:, 1]
 
         max_row_err = np.max(np.abs(rows_back - rows))
         max_col_err = np.max(np.abs(cols_back - cols))
@@ -202,8 +206,12 @@ def test_affine_round_trip_random_batch(require_landsat_file):
         rows = rng.uniform(10, nrows - 10, 500)
         cols = rng.uniform(10, ncols - 10, 500)
 
-        lats, lons, _ = geo.image_to_latlon(rows, cols)
-        rows_back, cols_back = geo.latlon_to_image(lats, lons)
+        geo_result = geo.image_to_latlon(rows, cols)
+        lats = geo_result[:, 0]
+        lons = geo_result[:, 1]
+        back_result = geo.latlon_to_image(lats, lons)
+        rows_back = back_result[:, 0]
+        cols_back = back_result[:, 1]
 
         rms_row = np.sqrt(np.mean((rows_back - rows) ** 2))
         rms_col = np.sqrt(np.mean((cols_back - cols) ** 2))
@@ -247,7 +255,8 @@ def test_affine_latitude_ordering(require_landsat_file):
         rows_sample = np.linspace(10, nrows - 10, 20)
         cols_sample = np.full_like(rows_sample, center_col)
 
-        lats, _, _ = geo.image_to_latlon(rows_sample, cols_sample)
+        geo_result = geo.image_to_latlon(rows_sample, cols_sample)
+        lats = geo_result[:, 0]
 
         # Check monotonicity (either all increasing or all decreasing)
         diffs = np.diff(lats)
@@ -275,7 +284,8 @@ def test_affine_longitude_ordering(require_landsat_file):
         cols_sample = np.linspace(10, ncols - 10, 20)
         rows_sample = np.full_like(cols_sample, center_row)
 
-        _, lons, _ = geo.image_to_latlon(rows_sample, cols_sample)
+        geo_result = geo.image_to_latlon(rows_sample, cols_sample)
+        lons = geo_result[:, 1]
 
         diffs = np.diff(lons)
         all_increasing = np.all(diffs > 0)
@@ -303,7 +313,9 @@ def test_affine_pixel_spacing_consistent(require_landsat_file):
         cols = np.array([ncols / 2.0 + i for i in range(11)])
         rows = np.full_like(cols, center_row)
 
-        lats, lons, _ = geo.image_to_latlon(rows, cols)
+        geo_result = geo.image_to_latlon(rows, cols)
+        lats = geo_result[:, 0]
+        lons = geo_result[:, 1]
 
         if _HAS_GEO_UTILS:
             distances = geographic_distance_batch(
@@ -412,21 +424,25 @@ def test_affine_stacked_array_with_real_data(require_landsat_file):
         geo = AffineGeolocation.from_reader(reader)
         nrows, ncols = geo.shape
 
-        # Stacked (2, 4) — four corner pixels
-        points = np.array([
-            [0.0, 0.0, nrows - 1.0, nrows - 1.0],
-            [0.0, ncols - 1.0, 0.0, ncols - 1.0],
-        ])
+        # Four corner pixels (separate arrays, not stacked)
+        rows = np.array([0.0, 0.0, nrows - 1.0, nrows - 1.0])
+        cols = np.array([0.0, ncols - 1.0, 0.0, ncols - 1.0])
 
-        result = geo.image_to_latlon(points)
-        assert result.shape == (3, 4)
+        result = geo.image_to_latlon(rows, cols)
+        assert result.shape == (4, 3)  # (n_points, 3) with lat, lon, height
 
+        # Extract lat, lon, height from result (n, 3)
+        lats = result[:, 0]
+        lons = result[:, 1]
+        
         # All latitudes valid
-        assert np.all(np.abs(result[0]) <= 90.0)
+        assert np.all(np.abs(lats) <= 90.0)
         # All longitudes valid
-        assert np.all(np.abs(result[1]) <= 180.0)
+        assert np.all(np.abs(lons) <= 180.0)
 
         # Round-trip via separate arrays
-        rows_back, cols_back = geo.latlon_to_image(result[0], result[1])
-        np.testing.assert_allclose(rows_back, points[0], atol=3.4e-5)
-        np.testing.assert_allclose(cols_back, points[1], atol=3.4e-5)
+        back_result = geo.latlon_to_image(lats, lons)
+        rows_back = back_result[:, 0]
+        cols_back = back_result[:, 1]
+        np.testing.assert_allclose(rows_back, rows, atol=3.4e-5)
+        np.testing.assert_allclose(cols_back, cols, atol=3.4e-5)

@@ -154,7 +154,9 @@ class TestSentinel1SLCGeolocation:
         rng = np.random.default_rng(42)
         rows = rng.uniform(0, shape[0], size=1000)
         cols = rng.uniform(0, shape[1], size=1000)
-        lats, lons, _ = geo.image_to_latlon(rows, cols)
+        geo_result = geo.image_to_latlon(rows, cols)
+        lats = geo_result[:, 0]
+        lons = geo_result[:, 1]
         assert lats.shape == (1000,)
         assert np.all((-90 <= lats) & (lats <= 90))
         assert np.all((-180 <= lons) & (lons <= 180))

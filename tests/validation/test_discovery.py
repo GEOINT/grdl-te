@@ -425,22 +425,23 @@ class TestLocalCatalogAddition:
         cat = LocalCatalog()
         results = [
             ScanResult(
-                filepath=Path(f"/tmp/sar{i}.tif"),
+                filepath=Path(f"/tmp/sar{idx}.tif"),
                 format="SICD",
                 rows=512,
                 cols=512,
                 dtype="complex64",
                 modality="SAR",
-            ),
-            ScanResult(
-                filepath=Path("/tmp/optical.tif"),
-                format="GeoTIFF",
-                rows=512,
-                cols=512,
-                dtype="uint8",
-                modality="EO",
-            ),
+            )
+            for idx in range(2)
         ]
+        results.append(ScanResult(
+            filepath=Path("/tmp/optical.tif"),
+            format="GeoTIFF",
+            rows=512,
+            cols=512,
+            dtype="uint8",
+            modality="EO",
+        ))
         cat.add_batch(results)
         sar_items = cat.filter(modality="SAR")
         assert len(sar_items) == 2
@@ -452,20 +453,23 @@ class TestLocalCatalogAddition:
         cat = LocalCatalog()
         results = [
             ScanResult(
-                filepath=Path(f"/tmp/sicd{i}.nitf"),
+                filepath=Path(f"/tmp/sicd{idx}.nitf"),
                 format="SICD",
                 rows=512,
                 cols=512,
                 dtype="complex64",
-            ),
+            )
+            for idx in range(2)
+        ]
+        results.append(
             ScanResult(
                 filepath=Path("/tmp/optical.tif"),
                 format="GeoTIFF",
                 rows=512,
                 cols=512,
                 dtype="uint8",
-            ),
-        ]
+            )
+        )
         cat.add_batch(results)
         sicd_items = cat.filter(format="SICD")
         assert len(sicd_items) == 2
@@ -481,26 +485,28 @@ class TestLocalCatalogFiltering:
         cat = LocalCatalog()
         results = [
             ScanResult(
-                filepath=Path(f"/tmp/umbra{i}.nitf"),
+                filepath=Path(f"/tmp/umbra{idx}.nitf"),
                 format="SICD",
                 rows=512,
                 cols=512,
                 dtype="complex64",
                 sensor="Umbra",
-            ),
-            ScanResult(
-                filepath=Path("/tmp/sentinel1.tif"),
-                format="GeoTIFF",
-                rows=512,
-                cols=512,
-                dtype="int16",
-                sensor="Sentinel-1",
-            ),
+            )
+            for idx in range(2)
         ]
+        results.append(ScanResult(
+            filepath=Path("/tmp/sentinel1.tif"),
+            format="GeoTIFF",
+            rows=512,
+            cols=512,
+            dtype="int16",
+            sensor="Sentinel-1",
+        ))
         cat.add_batch(results)
         umbra_items = cat.filter(sensor="umbra")
-        assert len(umbra_items) == 1
-        assert "umbra" in umbra_items[0].sensor.lower()
+        assert len(umbra_items) == 2
+        for item in umbra_items:
+            assert "umbra" in item.sensor.lower()
 
     def test_catalog_filter_by_date_range(self):
         """filter(date_start=..., date_end=...) temporal filtering."""
