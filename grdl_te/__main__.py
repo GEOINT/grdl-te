@@ -80,6 +80,8 @@ Examples:
   python -m grdl_te --report ./my_report.txt   # save report to file
   python -m grdl_te --view .benchmarks/        # view saved records in GUI
   python -m grdl_te --view rec1.json rec2.json # view specific JSON files
+  python -m grdl_te --stress-gui                # interactive stress test GUI
+  python -m grdl_te --stress-gui --port 8081    # custom port
 """,
     )
     parser.add_argument(
@@ -124,7 +126,11 @@ Examples:
     )
     parser.add_argument(
         "--port", type=int, default=8080,
-        help="Port for the GUI dashboard (default: 8080). Used with --view.",
+        help="Port for the GUI dashboard (default: 8080). Used with --view and --stress-gui.",
+    )
+    parser.add_argument(
+        "--stress-gui", action="store_true",
+        help="Launch the interactive stress test GUI dashboard.",
     )
 
     # ---- Stress test options ----
@@ -324,6 +330,13 @@ def main() -> None:
             )
         else:
             launch_ui(records, port=args.port)
+        sys.exit(0)
+
+    if args.stress_gui:
+        from grdl_te.benchmarking.stress_gui import launch_stress_gui
+        store_dir = args.store_dir or (Path.cwd() / ".benchmarks")
+        print(f"Launching Stress Test GUI on http://localhost:{args.port} ...")
+        launch_stress_gui(port=args.port, store_dir=store_dir)
         sys.exit(0)
 
     if args.stress_test:

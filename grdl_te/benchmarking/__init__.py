@@ -121,6 +121,7 @@ __all__ = [
     "print_stress_report",
     "save_stress_report",
     "save_stress_report_md",
+    "launch_stress_gui",
 ]
 
 
@@ -132,6 +133,9 @@ def __getattr__(name: str):
     if name == "launch_ui":
         from grdl_te.benchmarking.report_gui import launch_ui
         return launch_ui
+    if name == "launch_stress_gui":
+        from grdl_te.benchmarking.stress_gui import launch_stress_gui
+        return launch_stress_gui
     if name == "PassiveBenchmarkRunner":
         from grdl_te.benchmarking.passive import PassiveBenchmarkRunner
         return PassiveBenchmarkRunner

@@ -224,6 +224,56 @@ Stress results are stored separately under `<store-dir>/stress/` and never mixed
 | `data_prep` | ChipExtractor, Tiler, Normalizer |
 | `pipeline` | Sequential Pipeline composition |
 
+### Interactive GUI Stress Testing
+
+For developers who prefer a web-based interface, the **GRDL Stress Testing GUI** provides point-and-click component stress testing with customizable configurations and cross-run comparison.
+
+#### Quick Start
+
+```bash
+cd /nfs_home/alcourt/grdx/grdl-te
+streamlit run grdl_stress_gui.py
+```
+
+Then open `http://localhost:8501` in your browser.
+
+
+#### Features
+
+- **Auto-Discovery** — Automatically finds all importable GRDL processors (22 components)
+- **Real-Time Monitoring** — Track concurrency, latency, memory usage during tests
+- **Customizable Config** — Adjust stress parameters via web interface (concurrency ramp, duration, payload size)
+- **Result Persistence** — Save test results as JSON; full history available for analysis
+- **Comparison Workflow** — Select two results to compare side-by-side; identify improvements/regressions with automatic delta analysis
+- **No Code Required** — Pure click-based workflow; ideal for pre-commit validation or optimization validation
+
+#### Supported Components (22 total)
+
+**Fully Ready (12):**
+- Data Prep: Normalizer, Tiler, ChipExtractor
+- Filters: GaussianFilter, MeanFilter, MedianFilter, MinFilter, MaxFilter, StdDevFilter, LeeFilter
+- Intensity: ToDecibels, PercentileStretch
+
+**Partial Support (10):**
+- Interpolation: LanczosInterpolator, LagrangeInterpolator, KaiserSincInterpolator (require grid inputs)
+- Co-registration: AffineCoRegistration, ProjectiveCoRegistration (can use synthetic control points)
+
+#### Typical Workflow
+
+1. **Select Component** → Pick from auto-discovered list (e.g., "GaussianFilter")
+2. **Configure** → Set component parameters and stress config (max concurrency, duration, payload size)
+3. **Run** → Execute stress test; watch real-time metrics
+4. **Save** → Results auto-persist to `~/.grdl_stress_results/`
+5. **Optimize** → Modify your component code
+6. **Re-run** → Test the optimized version
+7. **Compare** → View baseline vs. current side-by-side; confirm improvements
+
+#### Documentation
+
+- **[GUI_README.md](GUI_README.md)** — Complete user manual with detailed workflows
+- **[COMPONENTS_REFERENCE.md](COMPONENTS_REFERENCE.md)** — Quick reference for all 22 components
+- **[GUI_STATUS.md](GUI_STATUS.md)** — Current status and architecture
+
 ### Active Workflow Benchmarking
 
 Run a `grdl-runtime` Workflow N times, aggregate per-step metrics, and persist results:
