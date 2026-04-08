@@ -182,6 +182,22 @@ python -m grdl_te --report ./reports/          # save report to directory
 python -m grdl_te --report ./my_report.txt     # save report to file
 ```
 
+### CLI Stress Test Suite
+
+Stress testing is a separate mode invoked with `--stress-test`, which runs a concurrency ramp on representative components and reports where and how failures occur:
+
+```bash
+python -m grdl_te --stress-test                                # default config
+python -m grdl_te --stress-test --stress-concurrency 8         # up to 8 workers
+python -m grdl_te --stress-test --stress-steps 5               # 5 ramp levels
+python -m grdl_te --stress-test --stress-duration 10.0         # 10 s per level
+python -m grdl_te --stress-test --size small                   # 512x512 payload
+python -m grdl_te --stress-test --report ./reports/            # save reports
+python -m grdl_te --stress-test --store-dir ./my_store         # persist records
+```
+
+Stress results are stored separately under `<store-dir>/stress/` and never mixed with benchmark records. See [docs/benchmarking-guide.md](docs/benchmarking-guide.md) for full stress testing documentation and `stress_testing_example.py` for a runnable demonstration.
+
 **Array size presets:**
 
 | Preset | Dimensions |
@@ -311,7 +327,8 @@ All public GRDL components have both a dedicated benchmark in `suite.py` and a c
 | Benchmarked components | 78/78 |
 | Benchmark groups | 13 |
 | Validation test files | 51 |
-| Benchmark infrastructure tests | 6 |
+| Benchmark infrastructure tests | 232 |
+| Stress testing infrastructure tests | 86 |
 | YAML workflow steps | 28 |
 | Array size presets | small (512), medium (2048), large (4096) |
 

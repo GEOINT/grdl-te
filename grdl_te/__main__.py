@@ -8,10 +8,12 @@ Run with::
     python -m grdl_te --size small -n 5        # small, 5 iterations
     python -m grdl_te --only filters io        # specific groups
     python -m grdl_te --store-dir ./results    # custom output
+    python -m grdl_te --stress-test            # stress test with defaults
+    python -m grdl_te --stress-test --stress-concurrency 8 --stress-steps 4
 
 Author
 ------
-Ava Courtney
+Ava Courtney <courtney-ava@zai.com>
 
 License
 -------
@@ -24,7 +26,7 @@ Created
 
 Modified
 --------
-2026-02-13
+2026-04-07
 """
 
 # Standard library
@@ -40,6 +42,12 @@ from grdl_te.benchmarking.suite import (
     DEFAULT_SIZE,
     DEFAULT_WARMUP,
     run_suite,
+)
+from grdl_te.benchmarking.stress_models import (
+    DEFAULT_DURATION_PER_STEP_S,
+    DEFAULT_MAX_CONCURRENCY,
+    DEFAULT_RAMP_STEPS,
+    StressTestConfig,
 )
 
 
@@ -118,6 +126,45 @@ Examples:
         "--port", type=int, default=8080,
         help="Port for the GUI dashboard (default: 8080). Used with --view.",
     )
+
+    # ---- Stress test options ----
+    stress = parser.add_argument_group(
+        "stress testing",
+        description=(
+            "Run a concurrency ramp stress test instead of the standard "
+            "benchmark suite.  Results are stored separately under "
+            "<store-dir>/stress/ and produce a dedicated report."
+        ),
+    )
+    stress.add_argument(
+        "--stress-test", action="store_true",
+        help="Run stress tests instead of standard benchmarks.",
+    )
+    stress.add_argument(
+        "--stress-concurrency", type=int, default=DEFAULT_MAX_CONCURRENCY,
+        metavar="N",
+        help=(
+            f"Maximum worker concurrency for the stress ramp "
+            f"(default: {DEFAULT_MAX_CONCURRENCY})."
+        ),
+    )
+    stress.add_argument(
+        "--stress-steps", type=int, default=DEFAULT_RAMP_STEPS,
+        metavar="N",
+        help=(
+            f"Number of ramp steps (default: {DEFAULT_RAMP_STEPS}). "
+            "Uses geometric doubling from 1 to --stress-concurrency."
+        ),
+    )
+    stress.add_argument(
+        "--stress-duration", type=float, default=DEFAULT_DURATION_PER_STEP_S,
+        metavar="S",
+        help=(
+            f"Seconds to sustain each concurrency level "
+            f"(default: {DEFAULT_DURATION_PER_STEP_S})."
+        ),
+    )
+
     return parser
 
 
@@ -179,6 +226,78 @@ def _load_records(paths: List[Path]) -> List["BenchmarkRecord"]:  # noqa: F821
     return records
 
 
+def _run_stress(args) -> None:
+    """Execute the stress test suite and report results."""
+    from pathlib import Path
+
+    from grdl_te.benchmarking.stress_runner import ComponentStressTester
+    from grdl_te.benchmarking.stress_store import JSONStressTestStore
+    from grdl_te.benchmarking.stress_report import (
+        print_stress_report,
+        save_stress_report,
+        save_stress_report_md,
+    )
+
+    config = StressTestConfig(
+        max_concurrency=args.stress_concurrency,
+        ramp_steps=args.stress_steps,
+        duration_per_step_s=args.stress_duration,
+        payload_size=args.size,
+    )
+
+    store_dir = args.store_dir or (Path.cwd() / ".benchmarks")
+    store = JSONStressTestStore(base_dir=store_dir)
+
+    print("GRDL Stress Test Suite")
+    print(f"  Payload size:    {config.payload_size}")
+    print(f"  Max concurrency: {config.max_concurrency}")
+    print(f"  Ramp steps:      {config.ramp_steps}")
+    print(f"  Step duration:   {config.duration_per_step_s}s")
+    print(f"  Store:           {store._stress_dir}")
+    print()
+
+    # Run stress tests on representative lightweight components
+    records = []
+    try:
+        import numpy as np
+        from grdl.data_prep import Normalizer
+
+        norm = Normalizer(method="minmax")
+        tester = ComponentStressTester(
+            "Normalizer.minmax",
+            norm.normalize,
+            store=store,
+            tags={"group": "data_prep"},
+        )
+        print("  Running: Normalizer.minmax ...")
+        record = tester.run(config)
+        records.append(record)
+        s = record.summary
+        print(
+            f"  Done. max_sustained={s.max_sustained_concurrency}  "
+            f"saturation={s.saturation_concurrency}  "
+            f"failures={s.failed_calls}/{s.total_calls}"
+        )
+    except Exception as exc:
+        print(f"  SKIP  Normalizer.minmax: {exc}")
+
+    if not records:
+        print("\nNo stress tests completed.")
+        return
+
+    for record in records:
+        if args.report is not None:
+            if args.report is True:
+                print_stress_report(record)
+            else:
+                report_path = save_stress_report(record, Path(args.report))
+                md_path = save_stress_report_md(record, Path(args.report))
+                print(f"\n  Text report:     {report_path}")
+                print(f"  Markdown report: {md_path}")
+        else:
+            print_stress_report(record)
+
+
 def main() -> None:
     """Parse arguments and run the benchmark suite."""
     args = _build_parser().parse_args()
@@ -205,6 +324,10 @@ def main() -> None:
             )
         else:
             launch_ui(records, port=args.port)
+        sys.exit(0)
+
+    if args.stress_test:
+        _run_stress(args)
         sys.exit(0)
 
     results = run_suite(

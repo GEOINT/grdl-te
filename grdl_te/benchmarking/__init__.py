@@ -54,6 +54,24 @@ from grdl_te.benchmarking.report_engine import (
 )
 from grdl_te.benchmarking.suite import run_suite
 from grdl_te.benchmarking.forensic import ForensicExecutionTrace, ForensicTraceReader
+from grdl_te.benchmarking.stress_models import (
+    FailurePoint,
+    StressTestConfig,
+    StressTestEvent,
+    StressTestRecord,
+    StressTestSummary,
+)
+from grdl_te.benchmarking.stress_base import BaseStressTester
+from grdl_te.benchmarking.stress_runner import ComponentStressTester
+from grdl_te.benchmarking.stress_store import JSONStressTestStore
+from grdl_te.benchmarking.unified_store import GRDLStore
+from grdl_te.benchmarking.stress_report import (
+    format_stress_report,
+    format_stress_report_md,
+    print_stress_report,
+    save_stress_report,
+    save_stress_report_md,
+)
 
 __all__ = [
     "ARRAY_SIZES",
@@ -87,6 +105,22 @@ __all__ = [
     "run_suite",
     "save_report",
     "save_report_md",
+    # Stress testing
+    "BaseStressTester",
+    "ComponentStressTester",
+    "FailurePoint",
+    "GRDLStore",
+    "JSONStressTestStore",
+    "WorkflowStressTester",
+    "StressTestConfig",
+    "StressTestEvent",
+    "StressTestRecord",
+    "StressTestSummary",
+    "format_stress_report",
+    "format_stress_report_md",
+    "print_stress_report",
+    "save_stress_report",
+    "save_stress_report_md",
 ]
 
 
@@ -101,4 +135,7 @@ def __getattr__(name: str):
     if name == "PassiveBenchmarkRunner":
         from grdl_te.benchmarking.passive import PassiveBenchmarkRunner
         return PassiveBenchmarkRunner
+    if name == "WorkflowStressTester":
+        from grdl_te.benchmarking.stress_runner import WorkflowStressTester
+        return WorkflowStressTester
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

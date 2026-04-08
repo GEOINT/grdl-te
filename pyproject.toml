@@ -83,6 +83,7 @@ markers = [
     "sicd: Dedicated SICDReader tests",
     "writers: IO writer roundtrip tests",
     "transforms: Detection geometry transform tests",
+    "stress_test: Stress testing engine tests (BaseStressTester, ComponentStressTester)",
 ]
 
 [tool.setuptools.packages.find]

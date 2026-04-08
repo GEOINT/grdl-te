@@ -621,6 +621,448 @@ print(f"\nDone. {len(all_records)} records saved to ./benchmark_results/")
 
 ---
 
+## 7. Stress Testing
+
+Stress testing answers a different question than benchmarking: not *"how fast is this?"* but *"at what concurrency level does this break, and what breaks first?"*
+
+Stress tests use a concurrency ramp: the engine submits batches of concurrent calls, doubling the worker count at each step, and records every success and failure event.  When failures are detected, the engine records `FailurePoint` objects describing the concurrency level, memory at failure, and error type.
+
+**Key difference from benchmarking:**
+- Benchmark records (`BenchmarkRecord`) track per-step timing distributions at controlled load.
+- Stress records (`StressTestRecord`) track failure points, saturation curves, and memory high-water marks under increasing concurrency.
+
+The two record types are stored separately and produce separate reports.  A `related_benchmark_id` field on the stress record optionally links to the corresponding benchmark for cross-reference.
+
+---
+
+### 7.1 Default Usage
+
+The simplest form: wrap any callable with `ComponentStressTester` and call `run()`.
+
+```python
+import numpy as np
+from grdl.data_prep import Normalizer
+from grdl_te.benchmarking import ComponentStressTester
+
+norm = Normalizer(method="minmax")
+
+tester = ComponentStressTester(
+    name="Normalizer.minmax",
+    fn=norm.normalize,
+)
+
+# run() with no args uses StressTestConfig defaults:
+#   start_concurrency=1, max_concurrency=16, ramp_steps=5,
+#   duration_per_step_s=10.0, payload_size="medium", timeout_per_call_s=30.0
+record = tester.run()
+
+s = record.summary
+print(f"Max sustained concurrency: {s.max_sustained_concurrency}")
+print(f"Saturation point:          {s.saturation_concurrency}")
+print(f"First failure mode:        {s.first_failure_mode}")
+print(f"p99 latency (success):     {s.p99_latency_s:.3f}s")
+print(f"Memory high-water mark:    {s.memory_high_water_mark_bytes / 1e6:.1f} MB")
+```
+
+---
+
+### 7.2 Custom Configuration
+
+Override any parameter via `StressTestConfig`:
+
+```python
+from grdl_te.benchmarking import ComponentStressTester, StressTestConfig
+
+config = StressTestConfig(
+    start_concurrency=1,       # lowest concurrency level tested
+    max_concurrency=16,        # highest concurrency level tested
+    ramp_steps=5,              # levels: 1 → 2 → 4 → 8 → 16 (geometric doubling)
+    duration_per_step_s=10.0,  # sustain each level for 10 seconds
+    payload_size="medium",     # 2048x2048 float32 array
+    timeout_per_call_s=30.0,   # calls exceeding this count as TimeoutError
+)
+
+tester = ComponentStressTester("MyComponent", my_fn)
+record = tester.run(config)
+```
+
+**Payload size** accepts the same presets as benchmarking or an explicit `"ROWSxCOLS"` string:
+
+```python
+StressTestConfig(payload_size="small")       # 512 x 512
+StressTestConfig(payload_size="medium")      # 2048 x 2048
+StressTestConfig(payload_size="large")       # 4096 x 4096
+StressTestConfig(payload_size="1024x768")    # custom dimensions
+```
+
+**Concurrency levels** are computed via geometric doubling:
+
+```python
+config = StressTestConfig(start_concurrency=1, max_concurrency=16, ramp_steps=5)
+print(config.concurrency_levels())  # [1, 2, 4, 8, 16]
+
+config = StressTestConfig(start_concurrency=2, max_concurrency=10, ramp_steps=3)
+print(config.concurrency_levels())  # [2, 4, 8] capped at 10 → [2, 4, 8]
+```
+
+---
+
+### 7.3 Setup Callback
+
+When your callable needs extra arguments, use the `setup` callback — the same convention as `ComponentBenchmark`:
+
+```python
+from grdl.image_processing.intensity import ToDecibels
+
+tdb = ToDecibels(floor_db=-80.0)
+
+def my_setup(payload):
+    # Ensure all values are positive before converting to dB
+    positive = abs(payload) + 1e-9
+    return (positive,), {}   # (args, kwargs)
+
+tester = ComponentStressTester(
+    name="ToDecibels",
+    fn=tdb.apply,
+    setup=my_setup,
+)
+record = tester.run(config)
+```
+
+The `setup` function receives the payload `np.ndarray` and returns `(args, kwargs)`.  `fn` is then called as `fn(*args, **kwargs)`.  When `setup=None` (default), `fn(payload)` is called directly.
+
+---
+
+### 7.4 Subclassing BaseStressTester
+
+For more complex scenarios — components with state, multi-step pipeline chains, or objects requiring initialization — subclass `BaseStressTester` directly:
+
+```python
+from grdl_te.benchmarking import BaseStressTester
+from grdl.data_prep import Normalizer
+from grdl.image_processing.filters import MeanFilter
+
+class NormalizeThenFilterStressTester(BaseStressTester):
+    """Stress test a normalise → filter pipeline chain."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._norm = Normalizer(method="zscore")
+        self._filt = MeanFilter(kernel_size=3)
+
+    @property
+    def component_name(self) -> str:
+        return "NormalizeThenFilter.pipeline"
+
+    def call_once(self, payload):
+        """Run normalize → filter as a single atomic call."""
+        normalized = self._norm.normalize(payload)
+        return self._filt.apply(normalized)
+
+tester = NormalizeThenFilterStressTester(version="0.4.0")
+record = tester.run(config)
+```
+
+The base class handles the entire ramp loop, event collection, failure detection, early abort on catastrophic failure (consecutive `MemoryError` / `OSError`), and `StressTestRecord` construction.  Subclasses only implement `component_name` and `call_once()`.
+
+---
+
+### 7.5 Failure Detection
+
+The engine automatically detects failure points when `call_once()` raises any exception or times out.  `FailurePoint` objects are created at the first failure of each error type at each concurrency level:
+
+```python
+from grdl_te.benchmarking import ComponentStressTester, StressTestConfig
+
+def fragile_fn(arr):
+    import threading
+    # Simulate a component with limited resource pool:
+    # fails when too many threads call it simultaneously
+    raise RuntimeError("resource pool exhausted")
+
+tester = ComponentStressTester("fragile", fragile_fn)
+record = tester.run(StressTestConfig(max_concurrency=8, ramp_steps=4))
+
+print(f"Failed calls:      {record.summary.failed_calls}")
+print(f"Saturation point:  {record.summary.saturation_concurrency} workers")
+print(f"First failure:     {record.summary.first_failure_mode}")
+print()
+for fp in record.failure_points:
+    print(f"  [{fp.error_type}] @ concurrency={fp.concurrency_level}")
+    print(f"    Memory at failure: {fp.memory_bytes_at_failure / 1e6:.1f} MB")
+    print(f"    Message:           {fp.error_message}")
+```
+
+**Early abort:** if 3 consecutive calls raise `MemoryError` or `OSError`, the ramp stops early to prevent OOM conditions.
+
+---
+
+### 7.6 Benchmark Linkage
+
+Link a stress record to a `BenchmarkRecord` to connect "normal-load timing statistics" with "where it breaks under pressure".  Both record types can be saved to the same `GRDLStore` — no need to manage two separate store objects:
+
+```python
+from grdl_te.benchmarking import ComponentBenchmark, ComponentStressTester, GRDLStore
+
+store = GRDLStore(base_dir=Path("./my_store"))
+
+# Step 1: benchmark for per-call timing statistics
+bench = ComponentBenchmark(
+    name="MyFilter",
+    fn=my_filter.apply,
+    setup=lambda: ((image,), {}),
+    iterations=10,
+    warmup=2,
+    store=store,   # GRDLStore handles BenchmarkRecord automatically
+)
+bench_record = bench.run()
+print(f"Benchmark mean: {bench_record.total_wall_time.mean:.4f}s")
+
+# Step 2: stress test, linked to the benchmark — same store
+tester = ComponentStressTester(
+    name="MyFilter",
+    fn=my_filter.apply,
+    related_benchmark_id=bench_record.benchmark_id,  # <-- link
+    store=store,                                      # same GRDLStore
+)
+stress_record = tester.run(config)
+
+# The stress report will include a cross-reference section pointing to
+# bench_record.benchmark_id for detailed timing statistics.
+print(f"Stress max_sustained: {stress_record.summary.max_sustained_concurrency}")
+print(f"Linked benchmark:     {stress_record.related_benchmark_id}")
+```
+
+---
+
+### 7.6b WorkflowStressTester (grdl-runtime Integration)
+
+`WorkflowStressTester` wraps a grdl-runtime `Workflow` object directly — you do not write `call_once()` by hand.  The tester calls `workflow.execute(payload, prefer_gpu=...)` internally for each concurrent slot.
+
+```python
+from grdl_rt import Workflow
+from grdl.image_processing.intensity import ToDecibels
+from grdl.image_processing.filters import GaussianFilter
+from grdl_te.benchmarking import WorkflowStressTester, StressTestConfig
+
+# Build a Workflow in array mode (no reader required)
+wf = (
+    Workflow("SAR Preprocessing", version="0.1.0")
+    .step(ToDecibels())
+    .step(GaussianFilter(sigma=1.0))
+)
+
+# WorkflowStressTester handles call_once automatically
+tester = WorkflowStressTester(
+    wf,
+    prefer_gpu=False,    # forwarded to workflow.execute()
+    version="0.1.0",
+    tags={"pipeline": "sar_preprocess"},
+)
+
+config = StressTestConfig(max_concurrency=8, ramp_steps=4)
+record = tester.run(config)
+print(f"Workflow: {record.component_name}")
+print(f"Max sustained concurrency: {record.summary.max_sustained_concurrency}")
+```
+
+**Requirements:** `grdl_rt` must be installed.  The `Workflow` must be usable in *array mode* — i.e., `workflow.execute(array)` must succeed.  Workflows that require a file-mode reader cannot be stress tested with `WorkflowStressTester` unless you wrap them in `ComponentStressTester` with a custom `call_once` that loads the file separately.
+
+---
+
+### 7.7 Saving and Loading Records — GRDLStore
+
+`GRDLStore` is the unified store for both `BenchmarkRecord` and `StressTestRecord`.  Both record types are saved under a single root directory — no need to manage two separate stores.
+
+```python
+from pathlib import Path
+from grdl_te.benchmarking import GRDLStore
+
+store = GRDLStore(base_dir=Path("./my_store"))
+
+# Save either record type with the same call:
+bench_id = store.save(bench_record)      # → <base_dir>/records/<benchmark_id>.json
+stress_id = store.save(stress_record)    # → <base_dir>/stress/records/<stress_test_id>.json
+
+# Load by type:
+loaded_bench  = store.load_benchmark(bench_id)
+loaded_stress = store.load_stress(stress_id)
+
+# List with optional filtering:
+benchmarks   = store.list_benchmarks(workflow_name="MyFilter", limit=20)
+stress_tests = store.list_stress_tests(component_name="MyFilter", limit=20)
+
+# Delete:
+store.delete_benchmark(bench_id)
+store.delete_stress(stress_id)
+
+# Rebuild indexes (useful after copying or corrupting the index):
+store.rebuild_benchmark_index()
+store.rebuild_stress_index()
+```
+
+**Storage layout:**
+
+```
+<base_dir>/
+    index.json                      ← benchmark index
+    records/
+        <benchmark_id>.json         ← BenchmarkRecord files
+    stress/
+        index.json                  ← stress test index
+        records/
+            <stress_test_id>.json   ← StressTestRecord files
+```
+
+This layout is backward-compatible with the previous `JSONBenchmarkStore` and `JSONStressTestStore` — existing on-disk data can be opened directly with `GRDLStore`.
+
+**Unified report saving:**
+
+`GRDLStore.save_report()` dispatches on record type automatically:
+
+```python
+# Saves the correct report format based on what record is passed:
+store.save_report(bench_record,   Path("bench.txt"),  fmt="text")
+store.save_report(stress_record,  Path("stress.md"),  fmt="markdown")
+```
+
+# List records with optional filtering
+all_records = store.list_records()
+for_component = store.list_records(component_name="MyComponent")
+
+# Delete a record
+store.delete(saved_id)
+```
+
+**Storage layout:**
+
+```
+my_store/
+    stress/
+        index.json              # lightweight index
+        records/
+            <uuid>.json         # one file per StressTestRecord
+    records/                    # BenchmarkRecord files (from JSONBenchmarkStore)
+    index.json
+```
+
+---
+
+### 7.8 Reports
+
+Stress test records produce their own separate reports — never merged with benchmark output:
+
+```python
+from grdl_te.benchmarking import (
+    format_stress_report,
+    format_stress_report_md,
+    print_stress_report,
+    save_stress_report,
+    save_stress_report_md,
+)
+
+# Print to terminal
+print_stress_report(record)
+
+# Get as a string
+text = format_stress_report(record)
+md = format_stress_report_md(record)
+
+# Save to directory (auto-named: stress_<id[:8]>.txt / .md)
+save_stress_report(record, Path("./reports/"))
+save_stress_report_md(record, Path("./reports/"))
+
+# Save to explicit path
+save_stress_report(record, Path("./my_stress_report.txt"))
+save_stress_report_md(record, Path("./my_stress_report.md"))
+```
+
+The text report includes:
+
+1. **Header** — component name, grdl version, run ID, timestamp
+2. **Hardware** — hostname, CPUs, total memory, GPU availability
+3. **Stress Configuration** — ramp parameters and computed concurrency levels
+4. **Saturation Curve** — table of workers vs. error rate vs. p99 latency
+5. **Failure Analysis** — each `FailurePoint` with error type, memory, and message
+6. **Summary** — headline statistics (max sustained concurrency, saturation point, memory high-water mark)
+7. **Cross-Reference** (optional) — link to the associated `BenchmarkRecord`
+
+---
+
+### 7.9 Cross-Run Comparison
+
+`StressTestRecord` is designed to be "loadable" — two records produced from different grdl versions have identical JSON key structures and can be compared field-by-field.  The `schema_version` field (currently `1`) is incremented when the schema changes, and `from_dict()` handles forward-compatible loading:
+
+```python
+# Run A: baseline grdl version
+record_a = tester.run(config)
+Path("./record_a.json").write_text(record_a.to_json())
+
+# Upgrade grdl, run again
+record_b = tester.run(config)
+Path("./record_b.json").write_text(record_b.to_json())
+
+# Compare
+from grdl_te.benchmarking import StressTestRecord
+
+a = StressTestRecord.from_json(Path("./record_a.json").read_text())
+b = StressTestRecord.from_json(Path("./record_b.json").read_text())
+
+print(f"grdl version A:     {a.grdl_version}")
+print(f"grdl version B:     {b.grdl_version}")
+print(f"Max sustained A:    {a.summary.max_sustained_concurrency}")
+print(f"Max sustained B:    {b.summary.max_sustained_concurrency}")
+print(f"p99 latency A:      {a.summary.p99_latency_s:.4f}s")
+print(f"p99 latency B:      {b.summary.p99_latency_s:.4f}s")
+```
+
+---
+
+### 7.10 CLI Stress Testing
+
+```bash
+# Default config (ramps to 16 workers, medium payload, 10 s/step)
+python -m grdl_te --stress-test
+
+# Custom concurrency and step count
+python -m grdl_te --stress-test --stress-concurrency 8 --stress-steps 4
+
+# Short steps for quick smoke test
+python -m grdl_te --stress-test --stress-duration 2.0 --size small
+
+# Save reports to a directory
+python -m grdl_te --stress-test --report ./reports/
+
+# Persist records to a custom store
+python -m grdl_te --stress-test --store-dir ./my_store
+```
+
+**Stress CLI options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--stress-test` | off | Enable stress test mode |
+| `--stress-concurrency N` | 16 | Maximum worker count for the ramp |
+| `--stress-steps N` | 5 | Number of ramp levels (geometric doubling) |
+| `--stress-duration S` | 10.0 | Seconds to sustain each concurrency level |
+| `--size` | medium | Payload preset (`small`, `medium`, `large`) |
+| `--store-dir PATH` | `.benchmarks/` | Where to persist records |
+| `--report [PATH]` | print | Print or save stress reports |
+
+---
+
+### 7.11 Complete Stress Test Example
+
+See `stress_testing_example.py` at the repository root for a self-contained, runnable demonstration of all features:
+
+```bash
+python stress_testing_example.py
+```
+
+The script demonstrates all 11 scenarios in under 60 seconds and writes output (JSON records, text reports, Markdown reports) to `./stress_example_output/`.
+
+---
+
 ## Quick Reference
 
 | What you want to do                  | How                                                        |
@@ -631,10 +1073,25 @@ print(f"\nDone. {len(all_records)} records saved to ./benchmark_results/")
 | Load traces from JSON                | `ForensicTraceReader.from_json_file(path)`                 |
 | Load traces from a directory         | `ForensicTraceReader.from_json_directory(dir)`             |
 | Load traces from history DB          | `ForensicTraceReader.from_history_db(run_ids)`             |
-| Save results to disk                 | `JSONBenchmarkStore(path).save(record)`                    |
+| Save results to disk                 | `GRDLStore(path).save(record)`                             |
 | Auto-save on run                     | Pass `store=` to any runner                                |
 | Generate a text report               | `print_report(records)` or `save_report(records, path)`    |
 | Generate a Markdown report           | `save_report_md(records, path)`                            |
 | Compare records                      | `compare_records(records, labels=...)`                     |
 | Run the full CLI suite               | `python -m grdl_te`                                        |
 | CLI with report output               | `python -m grdl_te --report ./reports/`                    |
+| **Stress test any callable**         | `ComponentStressTester(name, fn).run(config)`              |
+| **Stress test a grdl-runtime Workflow** | `WorkflowStressTester(wf).run(config)`                  |
+| **Stress test a custom pipeline**    | Subclass `BaseStressTester`, implement `call_once()`       |
+| **Custom ramp config**               | `StressTestConfig(max_concurrency=16, ramp_steps=5, ...)`  |
+| **Detect failure points**            | `record.failure_points` and `record.summary`               |
+| **Save any record type**             | `GRDLStore(path).save(record)` — dispatches automatically  |
+| **Load benchmark by ID**             | `GRDLStore(path).load_benchmark(benchmark_id)`             |
+| **Load stress by ID**                | `GRDLStore(path).load_stress(stress_test_id)`              |
+| **Generate stress report (text)**    | `print_stress_report(record)` / `save_stress_report(...)`  |
+| **Generate stress report (md)**      | `save_stress_report_md(record, path)`                      |
+| **Unified report dispatch**          | `GRDLStore(path).save_report(record, path, fmt="text")`    |
+| **Cross-run comparison**             | `StressTestRecord.from_json(...)`, compare `.summary`      |
+| **Link stress to benchmark**         | `ComponentStressTester(..., related_benchmark_id=id)`      |
+| **CLI stress test**                  | `python -m grdl_te --stress-test`                          |
+| **CLI stress with custom concurrency** | `python -m grdl_te --stress-test --stress-concurrency 8` |
