@@ -623,9 +623,16 @@ print(f"\nDone. {len(all_records)} records saved to ./benchmark_results/")
 
 ## 7. Stress Testing
 
-Stress testing answers a different question than benchmarking: not *"how fast is this?"* but *"at what concurrency level does this break, and what breaks first?"*
+Stress testing answers a different question than benchmarking: not *"how fast is this?"* but *"where does this break, and what breaks first?"*
 
-Stress tests use a concurrency ramp: the engine submits batches of concurrent calls, doubling the worker count at each step, and records every success and failure event.  When failures are detected, the engine records `FailurePoint` objects describing the concurrency level, memory at failure, and error type.
+GRDL-TE supports two **ramp modes**:
+
+| Mode | What varies | What is constant | Answers |
+|------|-------------|------------------|---------|
+| **Concurrency** (default) | Number of parallel workers (geometric doubling) | Payload array size | How many concurrent callers can this component sustain? |
+| **Payload** | Array dimensions (geometric doubling) | Concurrency level | How large an input can this component process without failure? |
+
+Both modes record every success and failure event and produce `FailurePoint` objects describing the breaking level, memory at failure, and error type.  Either mode can be combined with **run-until-failure** to stop automatically when a failure threshold is crossed.
 
 **Key difference from benchmarking:**
 - Benchmark records (`BenchmarkRecord`) track per-step timing distributions at controlled load.
@@ -678,8 +685,9 @@ config = StressTestConfig(
     max_concurrency=16,        # highest concurrency level tested
     ramp_steps=5,              # levels: 1 → 2 → 4 → 8 → 16 (geometric doubling)
     duration_per_step_s=10.0,  # sustain each level for 10 seconds
-    payload_size="medium",     # 2048x2048 float32 array
+    payload_size="medium",     # starting array size (2048×2048 float32)
     timeout_per_call_s=30.0,   # calls exceeding this count as TimeoutError
+    ramp_mode="concurrency",   # "concurrency" (default) or "payload"
 )
 
 tester = ComponentStressTester("MyComponent", my_fn)
@@ -1030,6 +1038,15 @@ python -m grdl_te --stress-test --stress-concurrency 8 --stress-steps 4
 # Short steps for quick smoke test
 python -m grdl_te --stress-test --stress-duration 2.0 --size small
 
+# Payload ramp mode — hold workers at 8, double array dims each step
+python -m grdl_te --stress-test --ramp-mode payload --stress-concurrency 8
+
+# Payload ramp, stop when 5% of calls fail
+python -m grdl_te --stress-test --ramp-mode payload --run-until-failure --failure-threshold 5.0
+
+# Concurrency ramp, escalate until failure (default threshold 10%)
+python -m grdl_te --stress-test --run-until-failure
+
 # Save reports to a directory
 python -m grdl_te --stress-test --report ./reports/
 
@@ -1042,16 +1059,106 @@ python -m grdl_te --stress-test --store-dir ./my_store
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--stress-test` | off | Enable stress test mode |
-| `--stress-concurrency N` | 16 | Maximum worker count for the ramp |
+| `--ramp-mode MODE` | `concurrency` | Ramp axis: `concurrency` or `payload` |
+| `--stress-concurrency N` | 16 | Max workers (concurrency mode) or fixed workers (payload mode) |
 | `--stress-steps N` | 5 | Number of ramp levels (geometric doubling) |
-| `--stress-duration S` | 10.0 | Seconds to sustain each concurrency level |
-| `--size` | medium | Payload preset (`small`, `medium`, `large`) |
+| `--stress-duration S` | 10.0 | Seconds to sustain each level |
+| `--size` | medium | Starting payload preset (`small`, `medium`, `large`) |
+| `--run-until-failure` | off | Stop early when failure threshold is crossed |
+| `--failure-threshold PCT` | 10.0 | % of calls failing at a level to declare saturation |
+| `--max-wall-time S` | none | Hard wall-clock limit for the entire run |
+| `--max-escalation-concurrency N` | 512 | Hard ceiling for concurrency ramp |
+| `--max-escalation-payload-dim PX` | 16384 | Hard ceiling for payload linear dimension |
 | `--store-dir PATH` | `.benchmarks/` | Where to persist records |
 | `--report [PATH]` | print | Print or save stress reports |
 
 ---
 
-### 7.11 Complete Stress Test Example
+### 7.11 Ramp Modes in Depth
+
+#### Concurrency ramp (`ramp_mode="concurrency"`)
+
+The concurrency ramp is the default mode.  It holds the payload array constant at `payload_size` and runs the component under increasing parallelism.
+
+```
+Step 1: 1 worker  → N calls over 10s  → record events
+Step 2: 2 workers → N calls over 10s  → record events
+Step 3: 4 workers → N calls over 10s  → record events
+...
+```
+
+Use this to find the thread-safety limit, the point where lock contention begins, or the CPU core count where performance flattens.
+
+#### Payload ramp (`ramp_mode="payload"`)
+
+The payload ramp holds concurrency fixed at `max_concurrency` and doubles the array's linear dimensions each step, starting from `payload_size`.
+
+```
+Step 1: 512×512    → N calls at 8 workers → record events
+Step 2: 1024×1024  → N calls at 8 workers → record events
+Step 3: 2048×2048  → N calls at 8 workers → record events
+Step 4: 4096×4096  → N calls at 8 workers → record events
+...
+```
+
+Use this to find memory limits (OOM), algorithmic complexity inflection points (O(n²) steps), or the largest tile a component can process reliably before allocation failures begin.
+
+Array sizes grow quadratically in memory per doubling: a 4096×4096 float32 array is ~64 MB; a 16384×16384 array is ~1 GB.  The `max_escalation_payload_dim` ceiling protects against exhausting RAM.
+
+#### Combining with run-until-failure
+
+Both modes can use `run_until_failure=True`.  When disabled, all configured levels always run.  When enabled, the run stops at the first level where the failure rate crosses `failure_threshold_pct`.
+
+```python
+# Payload ramp — stop when 10% of calls fail at any size
+config = StressTestConfig(
+    ramp_mode="payload",
+    max_concurrency=8,
+    payload_size="small",  # starting size: 512×512
+    failure_threshold_pct=10.0,
+    run_until_failure=True,
+    max_escalation_payload_dim=8192,  # never test above 8192×8192
+)
+```
+
+---
+
+### 7.12 Interactive GUI Stress Testing
+
+GRDL-TE includes a NiceGUI web dashboard for point-and-click stress testing without writing any code.
+
+```bash
+python -m grdl_te --stress-gui --port 8080
+```
+
+Then open `http://localhost:8080`.
+
+#### Features
+
+- **Auto-discovery** — finds all importable GRDL components automatically
+- **Ramp mode selector** — switch between concurrency and payload ramp axes
+- **Run-until-failure** — enable failure threshold, wall-time budget, and escalation ceilings
+- **Real-time log** — stream progress during the run
+- **Saturation chart** — X-axis is concurrency level (workers) or payload shape depending on mode, with saturation and ceiling markers
+- **Load & compare** — load any saved JSON record; compare two records side-by-side with delta analysis
+- **Auto-save** — records persist to `<store-dir>/stress/records/` automatically
+
+#### GUI parameter reference
+
+| Parameter | Description |
+|-----------|-------------|
+| **Ramp mode** | `Concurrency` or `Payload size` — which axis to ramp |
+| **Max concurrency** | Upper bound for worker count; fixed value in payload mode |
+| **Ramp steps** | Number of geometric doubling levels |
+| **Step duration** | Seconds to sustain each level |
+| **Payload size** | Starting array size (`small 512×512`, `medium 2048×2048`, `large 4096×4096`) |
+| **Stop at failure threshold** | When on, the run stops at the first level where failures exceed the threshold |
+| **Failure threshold (%)** | 0.1–100: % of calls failing to declare saturation |
+| **Max wall time** | Hard time limit (0 = no limit) |
+| **Concurrency ceiling** | Never exceed this many workers (safety limit for concurrency ramp) |
+| **Payload dim ceiling** | Never test arrays larger than this linear dimension in pixels |
+
+
 
 See `stress_testing_example.py` at the repository root for a self-contained, runnable demonstration of all features:
 
@@ -1083,6 +1190,9 @@ The script demonstrates all 11 scenarios in under 60 seconds and writes output (
 | **Stress test any callable**         | `ComponentStressTester(name, fn).run(config)`              |
 | **Stress test a grdl-runtime Workflow** | `WorkflowStressTester(wf).run(config)`                  |
 | **Stress test a custom pipeline**    | Subclass `BaseStressTester`, implement `call_once()`       |
+| **Concurrency ramp (default)**       | `StressTestConfig(ramp_mode="concurrency", ...)`           |
+| **Payload ramp**                     | `StressTestConfig(ramp_mode="payload", max_concurrency=8)` |
+| **Run until failure**                | `StressTestConfig(run_until_failure=True, failure_threshold_pct=10.0)` |
 | **Custom ramp config**               | `StressTestConfig(max_concurrency=16, ramp_steps=5, ...)`  |
 | **Detect failure points**            | `record.failure_points` and `record.summary`               |
 | **Save any record type**             | `GRDLStore(path).save(record)` — dispatches automatically  |

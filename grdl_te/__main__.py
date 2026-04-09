@@ -45,7 +45,6 @@ from grdl_te.benchmarking.suite import (
 )
 from grdl_te.benchmarking.stress_models import (
     DEFAULT_DURATION_PER_STEP_S,
-    DEFAULT_FAILURE_ESCALATION_MODE,
     DEFAULT_FAILURE_THRESHOLD_PCT,
     DEFAULT_MAX_CONCURRENCY,
     DEFAULT_MAX_ESCALATION_CONCURRENCY,
@@ -193,14 +192,6 @@ Examples:
             "at a fixed concurrency level, skipping the worker ramp."
         ),
     )
-    # Legacy alias kept for backward-compatible scripts
-    stress.add_argument(
-        "--escalate",
-        choices=("concurrency", "payload"),
-        default=None,
-        metavar="MODE",
-        help=argparse.SUPPRESS,  # hidden; prefer --ramp-mode
-    )
     stress.add_argument(
         "--failure-threshold", type=float, default=DEFAULT_FAILURE_THRESHOLD_PCT,
         metavar="PCT",
@@ -314,8 +305,7 @@ def _run_stress(args) -> None:
         duration_per_step_s=args.stress_duration,
         payload_size=args.size,
         run_until_failure=args.run_until_failure,
-        ramp_mode=args.escalate if args.escalate is not None else args.ramp_mode,
-        failure_escalation_mode=args.escalate if args.escalate is not None else args.ramp_mode,
+        ramp_mode=args.ramp_mode,
         failure_threshold_pct=args.failure_threshold,
         max_wall_time_s=args.max_wall_time,
         max_escalation_concurrency=args.max_escalation_concurrency,

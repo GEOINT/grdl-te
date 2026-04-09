@@ -52,17 +52,18 @@ from grdl_te.benchmarking.models import HardwareSnapshot
 # ---------------------------------------------------------------------------
 # Schema version
 # ---------------------------------------------------------------------------
-STRESS_SCHEMA_VERSION: int = 2
+STRESS_SCHEMA_VERSION: int = 3
 """Increment this whenever the ``StressTestRecord`` on-disk schema changes.
 
 Changelog
 ---------
-2 : Added ``run_until_failure``, ``failure_escalation_mode``,
-    ``failure_threshold_pct``, ``max_wall_time_s`` to ``StressTestConfig``;
-    added ``wall_time_budget_exceeded`` and ``saturation_payload_shape`` to
+2 : Added ``run_until_failure``, ``failure_threshold_pct``, ``max_wall_time_s``
+    to ``StressTestConfig``; added ``wall_time_budget_exceeded`` and
+    ``saturation_payload_shape`` to ``StressTestSummary``.
+3 : Added ``ramp_mode`` to ``StressTestConfig``.  Payload ramp mode now runs
+    its own geometric payload sequence instead of the concurrency ramp.
+    Added ``ceiling_hit`` and ``largest_successful_payload_shape`` to
     ``StressTestSummary``.
-3 : Added ``ramp_mode`` to ``StressTestConfig`` as the canonical ramp-axis
-    selector (supersedes ``failure_escalation_mode`` which is now legacy).
 """
 
 # ---------------------------------------------------------------------------
@@ -75,7 +76,6 @@ DEFAULT_DURATION_PER_STEP_S: float = 10.0
 DEFAULT_PAYLOAD_SIZE: str = "medium"
 DEFAULT_TIMEOUT_PER_CALL_S: float = 30.0
 DEFAULT_RUN_UNTIL_FAILURE: bool = False
-DEFAULT_FAILURE_ESCALATION_MODE: str = "concurrency"  # legacy name kept for old JSON compat
 DEFAULT_RAMP_MODE: str = "concurrency"
 """Primary ramp axis: ``"concurrency"`` or ``"payload"``."""
 DEFAULT_FAILURE_THRESHOLD_PCT: float = 10.0
@@ -117,19 +117,14 @@ class StressTestConfig:
         Maximum seconds allowed for a single call.  Calls that exceed
         this are recorded as ``TimeoutError`` events.
     run_until_failure : bool
-        When ``True``, the runner continues escalating the chosen
-        dimension past *max_concurrency* (or the base payload size)
-        after the standard ramp finishes, until
-        *failure_threshold_pct* % of calls fail at a level or
-        *max_wall_time_s* is exceeded.  Exactly one escalation axis is
-        active at a time; see *failure_escalation_mode*.
+        When ``True``, the runner stops after the first level where
+        *failure_threshold_pct* % of calls fail or *max_wall_time_s* is
+        exceeded.  Works with both ramp modes.
     ramp_mode : str
-        Primary ramp axis.  ``"concurrency"`` (default) runs the standard
-        worker-count ramp at a fixed payload size.  ``"payload"`` fixes
-        concurrency at *max_concurrency* and ramps payload size geometrically,
-        skipping the worker ramp entirely.  When *run_until_failure* is
-        ``True`` this becomes the escalation axis.  Supersedes the legacy
-        ``failure_escalation_mode`` field.
+        Which axis to ramp.  ``"concurrency"`` (default) doubles parallel
+        workers at each step while holding payload size constant.
+        ``"payload"`` holds concurrency at *max_concurrency* and doubles
+        array dimensions geometrically, skipping the worker ramp entirely.
     failure_threshold_pct : float
         Percentage of calls at a level that must fail before the runner
         declares saturation and stops.  Default 10 — one call in ten
@@ -140,13 +135,13 @@ class StressTestConfig:
         is bounded only by the configured ceilings.
     max_escalation_concurrency : int
         Hard ceiling for the number of concurrent workers when
-        ``failure_escalation_mode='concurrency'``.  The runner will
+        ``ramp_mode='concurrency'``.  The runner will
         never exceed this regardless of how many doublings it takes.
         Default ``512``.  Set lower if your machine has fewer cores or
         you want faster results.
     max_escalation_payload_dim : int
         Hard ceiling on the linear dimension (rows and cols) of the
-        payload array when ``failure_escalation_mode='payload'``.
+        payload array when ``ramp_mode='payload'``.
         A ``16384×16384`` float32 array occupies ~1 GB; reduce this
         if you want to protect available RAM.  Default ``16384``.
     """
@@ -158,7 +153,6 @@ class StressTestConfig:
     payload_size: str = DEFAULT_PAYLOAD_SIZE
     timeout_per_call_s: float = DEFAULT_TIMEOUT_PER_CALL_S
     run_until_failure: bool = DEFAULT_RUN_UNTIL_FAILURE
-    failure_escalation_mode: str = DEFAULT_FAILURE_ESCALATION_MODE  # legacy; use ramp_mode
     ramp_mode: str = DEFAULT_RAMP_MODE
     failure_threshold_pct: float = DEFAULT_FAILURE_THRESHOLD_PCT
     max_wall_time_s: Optional[float] = DEFAULT_MAX_WALL_TIME_S
@@ -186,11 +180,6 @@ class StressTestConfig:
         if self.timeout_per_call_s <= 0:
             raise ValueError(
                 f"timeout_per_call_s must be > 0, got {self.timeout_per_call_s}"
-            )
-        if self.failure_escalation_mode not in ("concurrency", "payload"):
-            raise ValueError(
-                f"failure_escalation_mode must be 'concurrency' or 'payload', "
-                f"got {self.failure_escalation_mode!r}"
             )
         if self.ramp_mode not in ("concurrency", "payload"):
             raise ValueError(
@@ -260,7 +249,6 @@ class StressTestConfig:
         }
         if self.run_until_failure:
             d["run_until_failure"] = True
-            d["failure_escalation_mode"] = self.ramp_mode  # legacy compat
             d["failure_threshold_pct"] = self.failure_threshold_pct
             d["max_escalation_concurrency"] = self.max_escalation_concurrency
             d["max_escalation_payload_dim"] = self.max_escalation_payload_dim
@@ -298,13 +286,7 @@ class StressTestConfig:
             run_until_failure=data.get(
                 "run_until_failure", DEFAULT_RUN_UNTIL_FAILURE
             ),
-            failure_escalation_mode=data.get(
-                "failure_escalation_mode", DEFAULT_FAILURE_ESCALATION_MODE
-            ),
-            ramp_mode=data.get(
-                "ramp_mode",
-                data.get("failure_escalation_mode", DEFAULT_RAMP_MODE),
-            ),
+            ramp_mode=data.get("ramp_mode", DEFAULT_RAMP_MODE),
             failure_threshold_pct=data.get(
                 "failure_threshold_pct", DEFAULT_FAILURE_THRESHOLD_PCT
             ),

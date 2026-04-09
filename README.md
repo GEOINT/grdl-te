@@ -184,27 +184,44 @@ python -m grdl_te --report ./my_report.txt     # save report to file
 
 ### CLI Stress Test Suite
 
-Stress testing is a separate mode invoked with `--stress-test`, which runs a concurrency ramp on representative components and reports where and how failures occur:
+Stress testing is a separate mode that runs a configurable ramp on representative components and reports where and how failures occur.  Two ramp modes are available:
+
+| Mode | What varies | Answers |
+|------|-------------|---------|
+| `concurrency` (default) | Parallel workers (doubles each step) | How many simultaneous callers can this sustain? |
+| `payload` | Array dimensions (doubles each step at fixed workers) | How large an input can this process without failure? |
 
 ```bash
-python -m grdl_te --stress-test                                # default config
-python -m grdl_te --stress-test --stress-concurrency 8         # up to 8 workers
-python -m grdl_te --stress-test --stress-steps 5               # 5 ramp levels
-python -m grdl_te --stress-test --stress-duration 10.0         # 10 s per level
-python -m grdl_te --stress-test --size small                   # 512x512 payload
-python -m grdl_te --stress-test --report ./reports/            # save reports
-python -m grdl_te --stress-test --store-dir ./my_store         # persist records
+# Concurrency ramp — default behaviour
+python -m grdl_te --stress-test
+
+# Payload ramp — ramp array size at fixed concurrency
+python -m grdl_te --stress-test --ramp-mode payload --stress-concurrency 8
+
+# Run until failure — stop when threshold % of calls fail
+python -m grdl_te --stress-test --run-until-failure --failure-threshold 5.0
+
+# Payload ramp until failure
+python -m grdl_te --stress-test --ramp-mode payload --run-until-failure
+
+# Common overrides
+python -m grdl_te --stress-test --stress-concurrency 8   # up to 8 workers
+python -m grdl_te --stress-test --stress-steps 5          # 5 ramp levels
+python -m grdl_te --stress-test --stress-duration 10.0    # 10 s per level
+python -m grdl_te --stress-test --size small              # 512×512 starting payload
+python -m grdl_te --stress-test --report ./reports/       # save reports
+python -m grdl_te --stress-test --store-dir ./my_store    # persist records
 ```
 
-Stress results are stored separately under `<store-dir>/stress/` and never mixed with benchmark records. See [docs/benchmarking-guide.md](docs/benchmarking-guide.md) for full stress testing documentation and `stress_testing_example.py` for a runnable demonstration.
+Stress results are stored separately under `<store-dir>/stress/` and never mixed with benchmark records. See [docs/benchmarking-guide.md](docs/benchmarking-guide.md) for full documentation.
 
 **Array size presets:**
 
 | Preset | Dimensions |
 |--------|-----------|
-| `small` | 512 x 512 |
-| `medium` | 2048 x 2048 |
-| `large` | 4096 x 4096 |
+| `small` | 512 × 512 |
+| `medium` | 2048 × 2048 |
+| `large` | 4096 × 4096 |
 
 **Benchmark groups (13):**
 
@@ -226,53 +243,39 @@ Stress results are stored separately under `<store-dir>/stress/` and never mixed
 
 ### Interactive GUI Stress Testing
 
-For developers who prefer a web-based interface, the **GRDL Stress Testing GUI** provides point-and-click component stress testing with customizable configurations and cross-run comparison.
+GRDL-TE includes a NiceGUI web dashboard for point-and-click stress testing without writing any code.
 
 #### Quick Start
 
 ```bash
-cd /nfs_home/alcourt/grdx/grdl-te
-streamlit run grdl_stress_gui.py
+python -m grdl_te --stress-gui --port 8080 --store-dir ./my_results
 ```
 
-Then open `http://localhost:8501` in your browser.
-
+Then open `http://localhost:8080` in your browser.
 
 #### Features
 
-- **Auto-Discovery** — Automatically finds all importable GRDL processors (22 components)
-- **Real-Time Monitoring** — Track concurrency, latency, memory usage during tests
-- **Customizable Config** — Adjust stress parameters via web interface (concurrency ramp, duration, payload size)
-- **Result Persistence** — Save test results as JSON; full history available for analysis
-- **Comparison Workflow** — Select two results to compare side-by-side; identify improvements/regressions with automatic delta analysis
-- **No Code Required** — Pure click-based workflow; ideal for pre-commit validation or optimization validation
-
-#### Supported Components (22 total)
-
-**Fully Ready (12):**
-- Data Prep: Normalizer, Tiler, ChipExtractor
-- Filters: GaussianFilter, MeanFilter, MedianFilter, MinFilter, MaxFilter, StdDevFilter, LeeFilter
-- Intensity: ToDecibels, PercentileStretch
-
-**Partial Support (10):**
-- Interpolation: LanczosInterpolator, LagrangeInterpolator, KaiserSincInterpolator (require grid inputs)
-- Co-registration: AffineCoRegistration, ProjectiveCoRegistration (can use synthetic control points)
+- **Auto-discovery** — finds all importable GRDL components; shows which are unavailable and why
+- **Ramp mode** — switch between concurrency ramp (vary workers) and payload ramp (vary array size)
+- **Run-until-failure** — enable failure threshold and ceiling limits; stop automatically at saturation
+- **Real-time log** — streaming output during the run; no need to watch a terminal
+- **Saturation chart** — X-axis locks to the ramp axis (workers for concurrency, shape for payload); saturation and ceiling markers
+- **Load & compare** — load any saved JSON record to view its report; load two records to compare side-by-side with delta analysis
+- **Auto-save** — records persist to `<store-dir>/stress/records/` automatically on run completion
 
 #### Typical Workflow
 
-1. **Select Component** → Pick from auto-discovered list (e.g., "GaussianFilter")
-2. **Configure** → Set component parameters and stress config (max concurrency, duration, payload size)
-3. **Run** → Execute stress test; watch real-time metrics
-4. **Save** → Results auto-persist to `~/.grdl_stress_results/`
-5. **Optimize** → Modify your component code
-6. **Re-run** → Test the optimized version
-7. **Compare** → View baseline vs. current side-by-side; confirm improvements
+1. **Select** a component from the auto-discovered list
+2. **Choose ramp mode** — concurrency (vary workers) or payload (vary array size)
+3. **Configure** — set max concurrency, step count, duration, payload size
+4. **Optionally enable** run-until-failure with a threshold and ceiling
+5. **Run** — watch the real-time log; chart appears when complete
+6. **Optimize** your component code
+7. **Re-run** — load the baseline JSON and the new result side-by-side for delta analysis
 
 #### Documentation
 
-- **[GUI_README.md](GUI_README.md)** — Complete user manual with detailed workflows
-- **[COMPONENTS_REFERENCE.md](COMPONENTS_REFERENCE.md)** — Quick reference for all 22 components
-- **[GUI_STATUS.md](GUI_STATUS.md)** — Current status and architecture
+- **[docs/benchmarking-guide.md](docs/benchmarking-guide.md)** — Full stress testing documentation including ramp modes, run-until-failure, and GUI parameter reference
 
 ### Active Workflow Benchmarking
 

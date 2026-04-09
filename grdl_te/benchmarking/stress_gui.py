@@ -88,7 +88,6 @@ from grdl_te.benchmarking._formatting import (
 )
 from grdl_te.benchmarking.stress_models import (
     DEFAULT_DURATION_PER_STEP_S,
-    DEFAULT_FAILURE_ESCALATION_MODE,
     DEFAULT_FAILURE_THRESHOLD_PCT,
     DEFAULT_MAX_CONCURRENCY,
     DEFAULT_MAX_ESCALATION_CONCURRENCY,
@@ -1817,13 +1816,16 @@ def _build_saturation_fig(
     payload_mode = x_mode == "payload"
 
     if payload_mode:
-        x_vals       = [r["megapixels"] for r in rows_data]
-        x_hover      = [r.get("payload_label", str(r.get("megapixels"))) for r in rows_data]
-        x_axis_title = "Payload size (megapixels) — area of each image chip"
+        # Categorical string labels — one tick per tested shape (e.g. "512×512").
+        # Equal spacing makes the chart structure identical to the concurrency
+        # chart; megapixels in the hover gives the numeric context.
+        x_vals       = [r.get("payload_label", f"{r['payload_shape'][0]}×{r['payload_shape'][1]}") for r in rows_data]
+        x_hover      = [f"{lbl} ({r['megapixels']:.2f} MP)" for lbl, r in zip(x_vals, rows_data)]
+        x_axis_title = "Payload shape — array dimensions passed to the component"
         no_err_label = "No call failures at any payload size ✓"
     else:
-        x_vals       = [r["concurrency"] for r in rows_data]
-        x_hover      = [str(r["concurrency"]) for r in rows_data]
+        x_vals       = [str(r["concurrency"]) for r in rows_data]
+        x_hover      = [f"{r['concurrency']} workers" for r in rows_data]
         x_axis_title = "Concurrent workers — simultaneous calls issued at once"
         no_err_label = "No call failures at any concurrency level ✓"
 
@@ -1857,40 +1859,48 @@ def _build_saturation_fig(
                              hovertemplate="%{text}: %{y:.1f}%<extra></extra>",
                              marker_color="#fb7185", opacity=0.7), row=2, col=1)
 
-    # Saturation marker
+    # Saturation and ceiling markers — use add_shape + add_annotation instead of
+    # add_vline because add_vline(x=string, annotation_text=...) raises TypeError
+    # in Plotly 6.x (it tries to do int + str arithmetic when positioning the
+    # annotation).  add_shape with a string x label is the canonical API for
+    # marking positions on categorical axes, and renders correctly in Plotly.js.
+    def _add_marker(label: str, color: str, dash: str, text: str) -> None:
+        """Add a vertical marker line + annotation on all subplot rows."""
+        if label not in x_vals:
+            return
+        for ri in range(1, num_chart_rows + 1):
+            xref = "x" if ri == 1 else f"x{ri}"
+            yref = "y domain" if ri == 1 else f"y{ri} domain"
+            fig.add_shape(
+                type="line",
+                x0=label, x1=label,
+                y0=0, y1=1,
+                xref=xref, yref=yref,
+                line=dict(color=color, dash=dash, width=1.5),
+            )
+        # Annotation only on the top row
+        fig.add_annotation(
+            x=label, y=1.05,
+            xref="x", yref="y domain",
+            text=text, showarrow=False,
+            font=dict(color=color, size=10),
+            xanchor="center",
+        )
+
     if payload_mode and s.saturation_payload_shape is not None:
         r_px, c_px = s.saturation_payload_shape
-        sat_mp = (r_px * c_px) / 1e6
-        for ri in range(1, num_chart_rows + 1):
-            fig.add_vline(x=sat_mp,
-                          line=dict(color="#fb7185", dash="dot", width=1.5),
-                          annotation_text=f"failure at {r_px}×{c_px}",
-                          annotation_font_color="#fb7185",
-                          row=ri, col=1)
+        _add_marker(f"{r_px}\u00d7{c_px}", "#fb7185", "dot", "failure threshold")
     elif not payload_mode and s.saturation_concurrency is not None:
-        for ri in range(1, num_chart_rows + 1):
-            fig.add_vline(x=s.saturation_concurrency,
-                          line=dict(color="#fb7185", dash="dot", width=1.5),
-                          annotation_text="saturation point",
-                          annotation_font_color="#fb7185",
-                          row=ri, col=1)
+        _add_marker(str(s.saturation_concurrency), "#fb7185", "dot", "saturation point")
 
-    # Ceiling marker — amber dashed line at the last tested value
-    if s.ceiling_hit:
+    # Ceiling marker — amber dashed line at the last successfully tested value
+    if s.ceiling_hit and x_vals:
         if payload_mode and s.largest_successful_payload_shape is not None:
             r_px, c_px = s.largest_successful_payload_shape
-            ceil_x = (r_px * c_px) / 1e6
-        elif not payload_mode and x_vals:
-            ceil_x = x_vals[-1]
+            ceil_label = f"{r_px}\u00d7{c_px}" if f"{r_px}\u00d7{c_px}" in x_vals else x_vals[-1]
         else:
-            ceil_x = None
-        if ceil_x is not None:
-            for ri in range(1, num_chart_rows + 1):
-                fig.add_vline(x=ceil_x,
-                              line=dict(color="#fbbf24", dash="dash", width=1.5),
-                              annotation_text="config ceiling",
-                              annotation_font_color="#fbbf24",
-                              row=ri, col=1)
+            ceil_label = x_vals[-1]
+        _add_marker(ceil_label, "#fbbf24", "dash", "config ceiling")
 
     fig.update_layout(
         template="plotly_dark",
@@ -1934,16 +1944,29 @@ def _render_saturation_chart(
         return
 
     # ------------------------------------------------------------------
-    # Resolve data rows (use precomputed when available to avoid blocking)
+    # Fast path: use the figure already built in the background thread.
+    # _build_saturation_fig calls make_subplots + update_layout which takes
+    # 300-500 ms on first import; running it here (on the asyncio event loop)
+    # would block the NiceGUI WebSocket heartbeat (ping_timeout = 2 s) and
+    # disconnect the browser, resetting the page to its initial state.
+    # ------------------------------------------------------------------
+    if precomputed is not None and precomputed.get("prebuilt_fig") is not None:
+        ui.plotly(precomputed["prebuilt_fig"]).classes("w-full")
+        ok_label = precomputed.get("ok_label")
+        if ok_label:
+            ui.label(ok_label).classes("text-emerald-400 text-xs mt-1")
+        return
+
+    # ------------------------------------------------------------------
+    # Slow path: compute on-demand (loaded/comparison records, or when the
+    # background precompute failed).  Acceptable because these are triggered
+    # by explicit user clicks, not by the polling timer.
     # ------------------------------------------------------------------
     if precomputed is not None:
         is_escalation_payload = precomputed["payload_mode"]
         level_rows   = precomputed["level_rows"]
         payload_rows = precomputed["payload_rows"]
     else:
-        # Fallback: compute on-demand (only for loaded/comparison records where
-        # precomputed is not available — those loads are user-triggered and the
-        # event counts are typically much smaller than live runs).
         is_escalation_payload = _is_payload_escalation_record(record)
         level_rows   = _per_level_stats(record)
         payload_rows = _per_payload_stats(record)
@@ -1952,8 +1975,6 @@ def _render_saturation_chart(
     # concurrency ramp  → X = concurrent workers
     # payload ramp      → X = megapixels
     cfg = record.config
-    # Prefer ramp_mode if available; fall back to detecting from event data for
-    # legacy records loaded from disk that pre-date the ramp_mode field.
     if cfg.ramp_mode == "payload" or is_escalation_payload:
         x_mode = "payload"
         rows_for_chart = payload_rows
@@ -2302,7 +2323,14 @@ def launch_stress_gui(
 
                             # Config sliders / inputs
                             ui.separator().classes("bg-white/5")
-                            ui.label("Stress Parameters").classes("text-xs text-slate-500 uppercase px-4 pt-3 pb-1")
+                            with ui.row().classes("items-center gap-1 px-4 pt-3 pb-1"):
+                                ui.label("Stress Parameters").classes("text-xs text-slate-500 uppercase tracking-widest")
+                                ui.icon("help_outline").classes("text-slate-500/60 text-sm cursor-help").tooltip(
+                                    "These parameters control the ramp schedule. "
+                                    "Max concurrency and ramp steps determine how many "
+                                    "load levels are tested. Duration controls how long "
+                                    "each level runs before advancing to the next."
+                                )
 
                             conc_input = ui.number(
                                 label="Max Concurrency",
@@ -2337,15 +2365,28 @@ def launch_stress_gui(
 
                             # ── Run Until Failure ──────────────────────────────────────
                             ui.separator().classes("bg-white/5")
-                            ui.label("Run Until Failure").classes(
-                                "text-xs text-slate-500 uppercase px-4 pt-3 pb-1"
-                            )
+                            with ui.row().classes("items-center gap-1 px-4 pt-3 pb-1"):
+                                ui.label("Run Until Failure").classes("text-xs text-slate-500 uppercase tracking-widest")
+                                ui.icon("help_outline").classes("text-slate-500/60 text-sm cursor-help").tooltip(
+                                    "When ‘Stop at failure threshold’ is on, the run halts "
+                                    "as soon as failures at any step exceed the threshold. "
+                                    "When off, all ramp steps always run to completion. "
+                                    "Use this to find the exact breaking point without "
+                                    "wasting time on levels beyond saturation."
+                                )
 
                             # Ramp mode — always visible (controlswhich axis is ramped)
                             ui.separator().classes("bg-white/5")
-                            ui.label("Ramp Mode").classes(
-                                "text-xs text-slate-500 uppercase px-4 pt-3 pb-1"
-                            )
+                            with ui.row().classes("items-center gap-1 px-4 pt-3 pb-1"):
+                                ui.label("Ramp Mode").classes("text-xs text-slate-500 uppercase tracking-widest")
+                                ui.icon("help_outline").classes("text-slate-500/60 text-sm cursor-help").tooltip(
+                                    "Concurrency: holds payload size constant and increases "
+                                    "the number of simultaneous workers each step. Answers: "
+                                    "‘How many parallel callers can this handle?’\n\n"
+                                    "Payload: holds worker count constant and doubles the "
+                                    "array dimensions each step. Answers: "
+                                    "‘How large an input can this handle?’"
+                                )
                             escalate_select = ui.select(
                                 options={
                                     "concurrency": "Concurrency — ramp parallel workers",
@@ -2356,14 +2397,14 @@ def launch_stress_gui(
                             ).props("dark dense outlined color=cyan").classes("mx-4 mb-2").style(
                                 "width: calc(100% - 2rem)"
                             )
-                            ui.label(
-                                "Concurrency: vary workers at a fixed payload. "
-                                "Payload: vary array size at a fixed concurrency."
-                            ).classes("mx-4 mb-2 text-slate-500 text-[11px] leading-relaxed")
 
                             ruf_toggle = ui.switch(
                                 "Stop at failure threshold",
-                            ).classes("mx-4 mb-2 text-slate-300 text-sm")
+                            ).classes("mx-4 mb-2 text-slate-300 text-sm").tooltip(
+                                "When on: the run stops at the first step where the failure "
+                                "rate exceeds the threshold below. When off: all ramp steps "
+                                "run to completion regardless of how many calls fail."
+                            )
 
                             with ui.column().classes("gap-0 w-full") as ruf_panel:
                                 threshold_input = ui.number(
@@ -2372,6 +2413,11 @@ def launch_stress_gui(
                                     min=0.1, max=100.0, precision=1,
                                 ).props("dark dense outlined color=cyan").classes("mx-4 mb-2").style(
                                     "width: calc(100% - 2rem)"
+                                ).tooltip(
+                                    "Percentage of calls at any step that must fail before "
+                                    "the run is stopped. Default 10 — one in ten calls failing "
+                                    "is a strong signal of saturation. Lower values stop earlier; "
+                                    "set to 100 to never stop early."
                                 )
 
                                 wall_time_input = ui.number(
@@ -2379,6 +2425,10 @@ def launch_stress_gui(
                                     value=0, min=0, max=86400, precision=0,
                                 ).props("dark dense outlined color=cyan").classes("mx-4 mb-2").style(
                                     "width: calc(100% - 2rem)"
+                                ).tooltip(
+                                    "Hard time budget for the entire run (ramp + escalation). "
+                                    "Set to 0 for no limit. Useful to prevent runaway tests "
+                                    "on large payloads or high concurrency ceilings."
                                 )
 
                                 conc_ceiling_input = ui.number(
@@ -2387,6 +2437,11 @@ def launch_stress_gui(
                                     min=1, max=65536, precision=0,
                                 ).props("dark dense outlined color=cyan").classes("mx-4 mb-2").style(
                                     "width: calc(100% - 2rem)"
+                                ).tooltip(
+                                    "Maximum concurrent workers the escalation run will ever "
+                                    "reach. This is a safety limit — the machine may saturate "
+                                    "well below this. Raise it to probe further; lower it to "
+                                    "protect the system from OOM or thrashing."
                                 )
 
                                 payload_ceiling_input = ui.number(
@@ -2395,13 +2450,14 @@ def launch_stress_gui(
                                     min=512, max=131072, precision=0,
                                 ).props("dark dense outlined color=cyan").classes("mx-4 mb-2").style(
                                     "width: calc(100% - 2rem)"
+                                ).tooltip(
+                                    "Maximum linear dimension (rows and cols) for the payload "
+                                    "array. A 16384×16384 float32 array occupies ~1 GB of RAM. "
+                                    "Lower this if you want to protect available memory. "
+                                    "If escalation reaches this ceiling without saturation, "
+                                    "an amber disclaimer appears in the report."
                                 )
 
-                                ui.label(
-                                    "When enabled: standard ramp runs first, then the "
-                                    "chosen dimension is doubled each step until "
-                                    "failures reach the threshold."
-                                ).classes("mx-4 mb-3 text-slate-500 text-[11px] leading-relaxed")
 
                             ruf_panel.set_visibility(False)
 
@@ -2600,7 +2656,6 @@ def launch_stress_gui(
                                     timeout_per_call_s=float(timeout_input.value or DEFAULT_TIMEOUT_PER_CALL_S),
                                     run_until_failure=bool(ruf_toggle.value),
                                     ramp_mode=escalate_select.value,
-                                    failure_escalation_mode=escalate_select.value,  # kept for compat
                                     failure_threshold_pct=float(threshold_input.value or DEFAULT_FAILURE_THRESHOLD_PCT),
                                     max_wall_time_s=wall_t if wall_t > 0 else None,
                                     max_escalation_concurrency=int(conc_ceiling_input.value or DEFAULT_MAX_ESCALATION_CONCURRENCY),
@@ -2675,10 +2730,33 @@ def launch_stress_gui(
                                         _level_rows = _per_level_stats(record)
                                         _payload_rows = _per_payload_stats(record)
                                         _is_payload = _is_payload_escalation_record(record)
+                                        # Determine chart rows and build the figure in the
+                                        # background thread — _build_saturation_fig calls
+                                        # make_subplots + update_layout(template=...)
+                                        # which takes 300-500 ms on first import.  Running
+                                        # this on the asyncio event loop risks exceeding
+                                        # NiceGUI's 2 s ping_timeout and disconnecting the
+                                        # browser WebSocket (which resets the page to its
+                                        # initial state).
+                                        _cfg = record.config
+                                        if _cfg.ramp_mode == "payload" or _is_payload:
+                                            _x_mode = "payload"
+                                            _chart_rows = _payload_rows
+                                        else:
+                                            _x_mode = "concurrency"
+                                            _chart_rows = _level_rows
+                                        if _chart_rows:
+                                            _prebuilt_fig, _ok_label = _build_saturation_fig(
+                                                record, _chart_rows, _x_mode
+                                            )
+                                        else:
+                                            _prebuilt_fig, _ok_label = None, None
                                         state.chart_data = {
                                             "payload_mode": _is_payload,
                                             "level_rows": _level_rows,
                                             "payload_rows": _payload_rows,
+                                            "prebuilt_fig": _prebuilt_fig,
+                                            "ok_label": _ok_label,
                                         }
                                     except Exception as _chart_exc:
                                         state.append_log(f"  Chart precompute warning: {_chart_exc}")
@@ -2737,12 +2815,17 @@ def launch_stress_gui(
                                     return
                                 poll_state["done"] = True
 
-                                # Run complete — cancel timer and finalise UI
-                                if poll_state["timer"] is not None:
+                                # Outer guard: any exception before or during render is caught
+                                # here so the browser never sees an unhandled exception that
+                                # would propagate out of _poll_tick and cause NiceGUI to
+                                # disconnect the WebSocket (which resets the page).
+                                try:
+                                  # Run complete — cancel timer and finalise UI
+                                  if poll_state["timer"] is not None:
                                     poll_state["timer"].cancel()
-                                run_btn.enable()
+                                  run_btn.enable()
 
-                                if state.error:
+                                  if state.error:
                                     progress_label.set_text(f"Error: {state.error}")
                                     progress_label.classes(replace="text-red-400 text-sm")
                                     ui.notify(
@@ -2751,43 +2834,47 @@ def launch_stress_gui(
                                     )
                                     return
 
-                                record = state.record
-                                if record is None:
+                                  record = state.record
+                                  if record is None:
                                     return
 
-                                _page_state["result_record"] = record
-                                progress_label.set_text(
-                                    f"Complete — max sustained: "
-                                    f"{record.summary.max_sustained_concurrency}"
-                                )
-                                progress_label.classes(replace="text-emerald-400 text-sm")
+                                  _page_state["result_record"] = record
+                                  progress_label.set_text(
+                                      f"Complete — max sustained: "
+                                      f"{record.summary.max_sustained_concurrency}"
+                                  )
+                                  progress_label.classes(replace="text-emerald-400 text-sm")
 
-                                # The record is already persisted by ComponentStressTester.run()
-                                # (via BaseStressTester.run → self._store.save(record)) in the
-                                # background thread.  DO NOT call store_obj.save(record) here —
-                                # for large run-until-failure records (millions of events) that
-                                # JSON serialisation can take many seconds and blocks the asyncio
-                                # event loop, starving the WebSocket heartbeat and causing the
-                                # browser to reconnect to a blank page.
-                                saved_path = (
-                                    save_dir / "stress" / "records"
-                                    / f"{record.stress_test_id}.json"
-                                )
-                                if saved_path.exists():
-                                    log_el.push(f"Saved: {saved_path}")
-                                    ui.notify(
-                                        f"Report saved: {saved_path.name}",
-                                        type="positive", position="top",
-                                    )
-                                else:
-                                    ui.notify(
-                                        "Run complete (auto-save may still be in progress).",
-                                        type="info", position="top",
-                                    )
+                                  # The record is already persisted by ComponentStressTester.run()
+                                  # (via BaseStressTester.run → self._store.save(record)) in the
+                                  # background thread.  DO NOT call store_obj.save(record) here —
+                                  # for large run-until-failure records (millions of events) that
+                                  # JSON serialisation can take many seconds and blocks the asyncio
+                                  # event loop, starving the WebSocket heartbeat and causing the
+                                  # browser to reconnect to a blank page.
+                                  saved_path = (
+                                      save_dir / "stress" / "records"
+                                      / f"{record.stress_test_id}.json"
+                                  )
+                                  try:
+                                      file_saved = saved_path.exists()
+                                  except OSError:
+                                      file_saved = False
+                                  if file_saved:
+                                      log_el.push(f"Saved: {saved_path}")
+                                      ui.notify(
+                                          f"Report saved: {saved_path.name}",
+                                          type="positive", position="top",
+                                      )
+                                  else:
+                                      ui.notify(
+                                          "Run complete (auto-save may still be in progress).",
+                                          type="info", position="top",
+                                      )
 
-                                # Render results inline — wrapped so that a render exception
-                                # never leaves results_container in a cleared-but-empty state.
-                                try:
+                                  # Render results inline — wrapped so that a render exception
+                                  # never leaves results_container in a cleared-but-empty state.
+                                  try:
                                     results_container.clear()
                                     with results_container:
                                         _render_full_report(record, precomputed=state.chart_data)
@@ -2813,13 +2900,13 @@ def launch_stress_gui(
                                             ).props("flat").classes(
                                                 "bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/30"
                                             )
-                                except Exception as render_exc:
+                                  except Exception as render_exc:
                                     # If rendering fails for any reason, show an error card
                                     # rather than leaving the page blank.
                                     results_container.clear()
                                     with results_container:
                                         with ui.card().classes(
-                                            "w-full bg-red-900/30 ring-1 ring-red-500/30"
+                                            "w-full bg-red-900/70 ring-1 ring-red-500/60"
                                         ).props("flat"):
                                             ui.label("Result rendering failed").classes(
                                                 "text-red-400 font-semibold text-sm"
@@ -2832,6 +2919,34 @@ def launch_stress_gui(
                                             ).classes("text-slate-400 text-xs mt-2")
                                     ui.notify(
                                         f"Render error: {render_exc}",
+                                        type="negative", position="top",
+                                    )
+                                except Exception as _completion_exc:
+                                    # Outer safety net: catch any exception in the run-complete
+                                    # block BEFORE the render try/except (e.g. NFS timeout on
+                                    # saved_path.exists(), or a NiceGUI element update that
+                                    # fails).  Without this, the exception propagates out of
+                                    # _poll_tick and NiceGUI's handle_exception swallows it
+                                    # silently, leaving results_container in its cleared (empty)
+                                    # state — which looks identical to the starting page.
+                                    import traceback as _tb
+                                    _tb.print_exc()
+                                    try:
+                                        results_container.clear()
+                                        with results_container:
+                                            with ui.card().classes(
+                                                "w-full bg-orange-900/70 ring-1 ring-orange-500/60"
+                                            ).props("flat"):
+                                                ui.label("Run complete — display failed").classes(
+                                                    "text-orange-300 font-semibold text-sm"
+                                                )
+                                                ui.label(str(_completion_exc)).classes(
+                                                    "text-orange-200 text-xs font-mono mt-1"
+                                                )
+                                    except Exception:
+                                        pass
+                                    ui.notify(
+                                        f"Display error: {_completion_exc}",
                                         type="negative", position="top",
                                     )
 
@@ -2939,4 +3054,17 @@ def launch_stress_gui(
                                         if entry.get("skip_reason"):
                                             ui.label(entry["skip_reason"]).classes("text-xs text-slate-500 italic")
 
-    ui.run(reload=False, title="GRDL Stress Test Runner", port=port)
+    # reconnect_timeout drives NiceGUI's socket.io heartbeat via the formulae:
+    #   ping_interval = max(reconnect_timeout * 0.8, 4)   (default: 4 s)
+    #   ping_timeout  = max(reconnect_timeout * 0.4, 2)   (default: 2 s)
+    # With the defaults the browser disconnects if the asyncio event loop is
+    # blocked for more than ~6 s — which can happen while _render_full_report
+    # builds charts for a large payload-ramp run.  Setting reconnect_timeout to
+    # 300 s gives ping_interval=240 s and ping_timeout=120 s, so the connection
+    # survives up to 6 minutes of rendering without the page resetting.
+    ui.run(
+        reload=False,
+        title="GRDL Stress Test Runner",
+        port=port,
+        reconnect_timeout=300.0,
+    )
