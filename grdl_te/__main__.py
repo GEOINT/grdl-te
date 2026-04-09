@@ -45,7 +45,12 @@ from grdl_te.benchmarking.suite import (
 )
 from grdl_te.benchmarking.stress_models import (
     DEFAULT_DURATION_PER_STEP_S,
+    DEFAULT_FAILURE_ESCALATION_MODE,
+    DEFAULT_FAILURE_THRESHOLD_PCT,
     DEFAULT_MAX_CONCURRENCY,
+    DEFAULT_MAX_ESCALATION_CONCURRENCY,
+    DEFAULT_MAX_ESCALATION_PAYLOAD_DIM,
+    DEFAULT_RAMP_MODE,
     DEFAULT_RAMP_STEPS,
     StressTestConfig,
 )
@@ -170,6 +175,65 @@ Examples:
             f"(default: {DEFAULT_DURATION_PER_STEP_S})."
         ),
     )
+    stress.add_argument(
+        "--run-until-failure", action="store_true",
+        help=(
+            "Stop early when failure_threshold_pct%% of calls fail at a step "
+            "or the wall-time budget is reached.  Works with both ramp modes."
+        ),
+    )
+    stress.add_argument(
+        "--ramp-mode",
+        choices=("concurrency", "payload"),
+        default=DEFAULT_RAMP_MODE,
+        metavar="MODE",
+        help=(
+            "Which axis to ramp.  'concurrency' (default) ramps parallel workers "
+            "at a fixed payload size.  'payload' ramps array dimensions geometrically "
+            "at a fixed concurrency level, skipping the worker ramp."
+        ),
+    )
+    # Legacy alias kept for backward-compatible scripts
+    stress.add_argument(
+        "--escalate",
+        choices=("concurrency", "payload"),
+        default=None,
+        metavar="MODE",
+        help=argparse.SUPPRESS,  # hidden; prefer --ramp-mode
+    )
+    stress.add_argument(
+        "--failure-threshold", type=float, default=DEFAULT_FAILURE_THRESHOLD_PCT,
+        metavar="PCT",
+        help=(
+            f"Percentage of calls that must fail at a level to declare "
+            f"saturation when --run-until-failure is active "
+            f"(default: {DEFAULT_FAILURE_THRESHOLD_PCT})."
+        ),
+    )
+    stress.add_argument(
+        "--max-wall-time", type=float, default=None,
+        metavar="S",
+        help=(
+            "Maximum total wall-clock seconds for the entire run "
+            "(ramp + escalation).  Omit for no hard limit."
+        ),
+    )
+    stress.add_argument(
+        "--max-escalation-concurrency", type=int,
+        default=DEFAULT_MAX_ESCALATION_CONCURRENCY, metavar="N",
+        help=(
+            f"Hard ceiling on concurrent workers during escalation "
+            f"(default: {DEFAULT_MAX_ESCALATION_CONCURRENCY})."
+        ),
+    )
+    stress.add_argument(
+        "--max-escalation-payload-dim", type=int,
+        default=DEFAULT_MAX_ESCALATION_PAYLOAD_DIM, metavar="PX",
+        help=(
+            f"Hard ceiling on payload linear dimension in pixels during escalation "
+            f"(default: {DEFAULT_MAX_ESCALATION_PAYLOAD_DIM})."
+        ),
+    )
 
     return parser
 
@@ -249,6 +313,13 @@ def _run_stress(args) -> None:
         ramp_steps=args.stress_steps,
         duration_per_step_s=args.stress_duration,
         payload_size=args.size,
+        run_until_failure=args.run_until_failure,
+        ramp_mode=args.escalate if args.escalate is not None else args.ramp_mode,
+        failure_escalation_mode=args.escalate if args.escalate is not None else args.ramp_mode,
+        failure_threshold_pct=args.failure_threshold,
+        max_wall_time_s=args.max_wall_time,
+        max_escalation_concurrency=args.max_escalation_concurrency,
+        max_escalation_payload_dim=args.max_escalation_payload_dim,
     )
 
     store_dir = args.store_dir or (Path.cwd() / ".benchmarks")

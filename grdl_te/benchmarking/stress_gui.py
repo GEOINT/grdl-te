@@ -88,7 +88,12 @@ from grdl_te.benchmarking._formatting import (
 )
 from grdl_te.benchmarking.stress_models import (
     DEFAULT_DURATION_PER_STEP_S,
+    DEFAULT_FAILURE_ESCALATION_MODE,
+    DEFAULT_FAILURE_THRESHOLD_PCT,
     DEFAULT_MAX_CONCURRENCY,
+    DEFAULT_MAX_ESCALATION_CONCURRENCY,
+    DEFAULT_MAX_ESCALATION_PAYLOAD_DIM,
+    DEFAULT_RAMP_MODE,
     DEFAULT_RAMP_STEPS,
     DEFAULT_START_CONCURRENCY,
     DEFAULT_TIMEOUT_PER_CALL_S,
@@ -1677,6 +1682,46 @@ def _per_level_stats(record: StressTestRecord) -> List[Dict[str, Any]]:
     return rows
 
 
+def _per_payload_stats(record: StressTestRecord) -> List[Dict[str, Any]]:
+    """Derive per-payload-shape statistics from a payload-escalation record.
+
+    Groups events by ``payload_shape`` and returns rows sorted by array
+    area (smallest to largest).  Each row carries the same statistics as
+    ``_per_level_stats`` plus ``payload_label`` (human-readable shape
+    string) and ``megapixels``.
+    """
+    buckets: Dict[tuple, List] = defaultdict(list)
+    for ev in record.events:
+        buckets[tuple(ev.payload_shape)].append(ev)
+
+    rows = []
+    for shape in sorted(buckets, key=lambda s: s[0] * s[1]):
+        evs = buckets[shape]
+        total = len(evs)
+        failed = sum(1 for e in evs if not e.success)
+        er = failed / total * 100.0 if total > 0 else 0.0
+        lats = [e.latency_s for e in evs if e.success]
+        p99 = float(np.percentile(lats, 99)) if lats else 0.0
+        p50 = float(np.percentile(lats, 50)) if lats else 0.0
+        rows.append({
+            "payload_shape": shape,
+            "payload_label": f"{shape[0]}\u00d7{shape[1]}",
+            "megapixels": round(shape[0] * shape[1] / 1_000_000, 2),
+            "total_calls": total,
+            "failed_calls": failed,
+            "error_rate_pct": round(er, 1),
+            "p50_latency_s": round(p50, 5),
+            "p99_latency_s": round(p99, 5),
+        })
+    return rows
+
+
+def _is_payload_escalation_record(record: StressTestRecord) -> bool:
+    """Return True when events span multiple distinct payload shapes."""
+    shapes = {tuple(e.payload_shape) for e in record.events}
+    return len(shapes) > 1
+
+
 # ---------------------------------------------------------------------------
 # Report card renderer
 # ---------------------------------------------------------------------------
@@ -1702,7 +1747,13 @@ def _render_stress_summary_card(record: StressTestRecord) -> None:
             _render_metric("Run At", record.created_at[:19])
             _render_metric("Max Sustained", str(s.max_sustained_concurrency), accent=True)
             if s.saturation_concurrency is not None:
-                _render_metric("Saturation @", str(s.saturation_concurrency))
+                _render_metric("Saturated @", f"{s.saturation_concurrency} workers", accent=True)
+            if s.saturation_payload_shape is not None:
+                r, c = s.saturation_payload_shape
+                _render_metric("Payload limit", f"{r}×{c}", accent=True)
+            if s.largest_successful_payload_shape is not None:
+                r, c = s.largest_successful_payload_shape
+                _render_metric("Largest OK payload", f"{r}×{c}")
             _render_metric("Total Calls", str(s.total_calls))
             _render_metric("Failed", str(s.failed_calls))
             _render_metric("P99 Latency", _fmt_time(s.p99_latency_s), accent=True)
@@ -1711,6 +1762,20 @@ def _render_stress_summary_card(record: StressTestRecord) -> None:
                 _render_metric("First Failure", s.first_failure_mode)
             else:
                 _render_metric("Failures", "None ✓")
+            if s.wall_time_budget_exceeded:
+                _render_metric("Wall-time", "Budget exceeded ⚠")
+
+        # Ceiling-hit disclaimer
+        if s.ceiling_hit and not s.wall_time_budget_exceeded:
+            ui.separator().classes("my-2 bg-amber-500/20")
+            with ui.row().classes("items-center gap-2 px-1"):
+                ui.icon("info").classes("text-amber-400 text-base")
+                ui.label(
+                    "No saturation found — escalation reached the configured hard ceiling "
+                    "before any failure threshold was hit. This limit is a safety setting you "
+                    "chose, not a reflection of the machine’s true capacity. Raise "
+                    "‘Max escalation ceiling’ in the sidebar and re-run to probe further."
+                ).classes("text-amber-300 text-xs leading-relaxed")
 
         if hw is not None:
             ui.separator().classes("my-2 bg-white/5")
@@ -1720,28 +1785,53 @@ def _render_stress_summary_card(record: StressTestRecord) -> None:
                 _render_metric("Memory", _fmt_bytes(hw.total_memory_bytes))
 
 
-def _render_saturation_chart(record: StressTestRecord) -> None:
-    """Render a Plotly saturation-curve chart (latency + optionally error rate vs concurrent workers)."""
-    try:
-        import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
-    except ImportError:
-        ui.label("(Install plotly to see saturation chart)").classes("text-slate-500 text-sm")
-        return
+def _build_saturation_fig(
+    record: StressTestRecord,
+    rows_data: List[Dict[str, Any]],
+    x_mode: str,  # "concurrency" or "payload"
+) -> "go.Figure":
+    """Build a Plotly saturation-curve figure from precomputed row data.
 
-    rows_data = _per_level_stats(record)
-    if not rows_data:
-        return
+    This is a pure function — no UI calls, safe to call from any thread.
+    ``x_mode`` controls the X-axis: ``"concurrency"`` groups by concurrency
+    level; ``"payload"`` groups by payload area in megapixels.
 
-    levels = [r["concurrency"] for r in rows_data]
-    p50s   = [r["p50_latency_s"] for r in rows_data]
-    p99s   = [r["p99_latency_s"] for r in rows_data]
-    errs   = [r["error_rate_pct"] for r in rows_data]
+    Parameters
+    ----------
+    record : StressTestRecord
+        The record whose summary metadata is used for annotations.
+    rows_data : list of dict
+        Already-computed rows from ``_per_level_stats`` or
+        ``_per_payload_stats``.
+    x_mode : str
+        Either ``"concurrency"`` or ``"payload"``.
 
-    # Only add an error-rate subplot when there are actual failures.
-    # Plotly autoscales an all-zero bar chart in ways that look misleading.
-    has_errors = record.summary.failed_calls > 0
-    x_axis_title = "Concurrent workers — number of simultaneous calls issued at once"
+    Returns
+    -------
+    plotly.graph_objects.Figure
+    """
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    s = record.summary
+    payload_mode = x_mode == "payload"
+
+    if payload_mode:
+        x_vals       = [r["megapixels"] for r in rows_data]
+        x_hover      = [r.get("payload_label", str(r.get("megapixels"))) for r in rows_data]
+        x_axis_title = "Payload size (megapixels) — area of each image chip"
+        no_err_label = "No call failures at any payload size ✓"
+    else:
+        x_vals       = [r["concurrency"] for r in rows_data]
+        x_hover      = [str(r["concurrency"]) for r in rows_data]
+        x_axis_title = "Concurrent workers — simultaneous calls issued at once"
+        no_err_label = "No call failures at any concurrency level ✓"
+
+    p50s = [r["p50_latency_s"] for r in rows_data]
+    p99s = [r["p99_latency_s"] for r in rows_data]
+    errs = [r["error_rate_pct"] for r in rows_data]
+
+    has_errors = s.failed_calls > 0
 
     if has_errors:
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
@@ -1749,28 +1839,58 @@ def _render_saturation_chart(record: StressTestRecord) -> None:
         num_chart_rows = 2
         chart_height = 360
     else:
-        fig = make_subplots(rows=1, cols=1,
-                            subplot_titles=("Latency (s)",))
+        fig = make_subplots(rows=1, cols=1, subplot_titles=("Latency (s)",))
         num_chart_rows = 1
         chart_height = 220
 
-    fig.add_trace(go.Scatter(x=levels, y=p50s, mode="lines+markers", name="P50 latency",
+    fig.add_trace(go.Scatter(x=x_vals, y=p50s, mode="lines+markers", name="P50 latency",
+                             text=x_hover, hovertemplate="%{text}: P50 %{y:.3f}s<extra></extra>",
                              line=dict(color="#22d3ee", width=2),
                              marker=dict(size=6)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=levels, y=p99s, mode="lines+markers", name="P99 latency",
+    fig.add_trace(go.Scatter(x=x_vals, y=p99s, mode="lines+markers", name="P99 latency",
+                             text=x_hover, hovertemplate="%{text}: P99 %{y:.3f}s<extra></extra>",
                              line=dict(color="#fbbf24", width=2, dash="dash"),
                              marker=dict(size=6)), row=1, col=1)
 
     if has_errors:
-        fig.add_trace(go.Bar(x=levels, y=errs, name="Error %",
+        fig.add_trace(go.Bar(x=x_vals, y=errs, name="Error %", text=x_hover,
+                             hovertemplate="%{text}: %{y:.1f}%<extra></extra>",
                              marker_color="#fb7185", opacity=0.7), row=2, col=1)
 
-    if record.summary.saturation_concurrency is not None:
-        sat = record.summary.saturation_concurrency
-        for row_idx in range(1, num_chart_rows + 1):
-            fig.add_vline(x=sat, line=dict(color="#fb7185", dash="dot", width=1.5),
-                          annotation_text="saturation point", annotation_font_color="#fb7185",
-                          row=row_idx, col=1)
+    # Saturation marker
+    if payload_mode and s.saturation_payload_shape is not None:
+        r_px, c_px = s.saturation_payload_shape
+        sat_mp = (r_px * c_px) / 1e6
+        for ri in range(1, num_chart_rows + 1):
+            fig.add_vline(x=sat_mp,
+                          line=dict(color="#fb7185", dash="dot", width=1.5),
+                          annotation_text=f"failure at {r_px}×{c_px}",
+                          annotation_font_color="#fb7185",
+                          row=ri, col=1)
+    elif not payload_mode and s.saturation_concurrency is not None:
+        for ri in range(1, num_chart_rows + 1):
+            fig.add_vline(x=s.saturation_concurrency,
+                          line=dict(color="#fb7185", dash="dot", width=1.5),
+                          annotation_text="saturation point",
+                          annotation_font_color="#fb7185",
+                          row=ri, col=1)
+
+    # Ceiling marker — amber dashed line at the last tested value
+    if s.ceiling_hit:
+        if payload_mode and s.largest_successful_payload_shape is not None:
+            r_px, c_px = s.largest_successful_payload_shape
+            ceil_x = (r_px * c_px) / 1e6
+        elif not payload_mode and x_vals:
+            ceil_x = x_vals[-1]
+        else:
+            ceil_x = None
+        if ceil_x is not None:
+            for ri in range(1, num_chart_rows + 1):
+                fig.add_vline(x=ceil_x,
+                              line=dict(color="#fbbf24", dash="dash", width=1.5),
+                              annotation_text="config ceiling",
+                              annotation_font_color="#fbbf24",
+                              row=ri, col=1)
 
     fig.update_layout(
         template="plotly_dark",
@@ -1784,13 +1904,71 @@ def _render_saturation_chart(record: StressTestRecord) -> None:
     fig.update_xaxes(title_text=x_axis_title, row=num_chart_rows, col=1)
     for ann in fig.layout.annotations:
         ann.font = dict(size=11, color="#94a3b8")
+    return fig, no_err_label if not has_errors else None
 
+
+def _render_saturation_chart(
+    record: StressTestRecord,
+    precomputed: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Render the saturation-curve chart section.
+
+    For escalation runs the X-axis is locked to the stressor dimension
+    (payload megapixels for payload escalation, concurrent workers for
+    concurrency escalation).  For standard (non-escalation) ramp runs a
+    small toggle lets the user switch between the two X-axis views.
+
+    Parameters
+    ----------
+    record : StressTestRecord
+        The record to visualise.
+    precomputed : dict, optional
+        Pre-built row data from the background thread.  When present the
+        function avoids iterating events on the event loop.  Expected keys:
+        ``"payload_mode"``, ``"level_rows"``, ``"payload_rows"``.
+    """
+    try:
+        import plotly.graph_objects as go  # noqa: F401 — verify plotly is installed
+    except ImportError:
+        ui.label("(Install plotly to see saturation chart)").classes("text-slate-500 text-sm")
+        return
+
+    # ------------------------------------------------------------------
+    # Resolve data rows (use precomputed when available to avoid blocking)
+    # ------------------------------------------------------------------
+    if precomputed is not None:
+        is_escalation_payload = precomputed["payload_mode"]
+        level_rows   = precomputed["level_rows"]
+        payload_rows = precomputed["payload_rows"]
+    else:
+        # Fallback: compute on-demand (only for loaded/comparison records where
+        # precomputed is not available — those loads are user-triggered and the
+        # event counts are typically much smaller than live runs).
+        is_escalation_payload = _is_payload_escalation_record(record)
+        level_rows   = _per_level_stats(record)
+        payload_rows = _per_payload_stats(record)
+
+    # The X-axis is always determined by ramp_mode — no toggle needed.
+    # concurrency ramp  → X = concurrent workers
+    # payload ramp      → X = megapixels
+    cfg = record.config
+    # Prefer ramp_mode if available; fall back to detecting from event data for
+    # legacy records loaded from disk that pre-date the ramp_mode field.
+    if cfg.ramp_mode == "payload" or is_escalation_payload:
+        x_mode = "payload"
+        rows_for_chart = payload_rows
+    else:
+        x_mode = "concurrency"
+        rows_for_chart = level_rows
+
+    if not rows_for_chart:
+        ui.label("No chart data available.").classes("text-slate-500 text-sm")
+        return
+
+    fig, ok_label = _build_saturation_fig(record, rows_for_chart, x_mode)
     ui.plotly(fig).classes("w-full")
-
-    if not has_errors:
-        ui.label("No call failures at any concurrency level ✓").classes(
-            "text-emerald-400 text-xs mt-1"
-        )
+    if ok_label:
+        ui.label(ok_label).classes("text-emerald-400 text-xs mt-1")
 
 
 def _render_failure_table(record: StressTestRecord) -> None:
@@ -1822,11 +2000,25 @@ def _render_failure_table(record: StressTestRecord) -> None:
     ).classes("w-full")
 
 
-def _render_full_report(record: StressTestRecord) -> None:
-    """Render summary card, saturation chart, and failure table for one record."""
+def _render_full_report(
+    record: StressTestRecord,
+    precomputed: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Render summary card, saturation chart, and failure table for one record.
+
+    Parameters
+    ----------
+    record : StressTestRecord
+        The record to render.
+    precomputed : dict, optional
+        Pre-built chart row data (from background thread).  When provided,
+        ``_render_saturation_chart`` will use it without iterating events on
+        the event loop.  Keys: ``"payload_mode"``, ``"level_rows"``,
+        ``"payload_rows"``.
+    """
     _render_stress_summary_card(record)
     ui.label("Saturation Curve").classes("text-sm font-semibold text-slate-400 uppercase tracking-widest mt-4 mb-2")
-    _render_saturation_chart(record)
+    _render_saturation_chart(record, precomputed=precomputed)
     _render_failure_table(record)
 
 
@@ -1963,10 +2155,10 @@ def _render_comparison_view(rec_a: StressTestRecord, rec_b: StressTestRecord) ->
     with ui.row().classes("w-full gap-4 flex-wrap"):
         with ui.column().classes("flex-1 min-w-64"):
             ui.badge("Run A Full Detail").classes("bg-cyan-700 text-slate-100 mb-2")
-            _render_full_report(rec_a)
+            _render_full_report(rec_a)  # no precomputed — comparison records are user-loaded
         with ui.column().classes("flex-1 min-w-64"):
             ui.badge("Run B Full Detail").classes("bg-violet-700 text-slate-100 mb-2")
-            _render_full_report(rec_b)
+            _render_full_report(rec_b)  # no precomputed — comparison records are user-loaded
 
 
 # ---------------------------------------------------------------------------
@@ -1982,6 +2174,10 @@ class _StressRunState:
         self.error: Optional[str] = None
         self.log_lines: List[str] = []
         self.record: Optional[StressTestRecord] = None
+        # Precomputed chart data — populated in the background thread before
+        # state.running is set to False.  This avoids iterating potentially
+        # hundreds-of-thousands of events inside the asyncio event loop.
+        self.chart_data: Optional[Dict[str, Any]] = None
         self._lock = threading.Lock()
 
     def append_log(self, line: str) -> None:
@@ -2139,6 +2335,90 @@ def launch_stress_gui(
                                 value=DEFAULT_START_CONCURRENCY, min=1, max=64, precision=0,
                             ).props("dark dense outlined color=cyan").classes("mx-4 mb-3").style("width: calc(100% - 2rem)")
 
+                            # ── Run Until Failure ──────────────────────────────────────
+                            ui.separator().classes("bg-white/5")
+                            ui.label("Run Until Failure").classes(
+                                "text-xs text-slate-500 uppercase px-4 pt-3 pb-1"
+                            )
+
+                            # Ramp mode — always visible (controlswhich axis is ramped)
+                            ui.separator().classes("bg-white/5")
+                            ui.label("Ramp Mode").classes(
+                                "text-xs text-slate-500 uppercase px-4 pt-3 pb-1"
+                            )
+                            escalate_select = ui.select(
+                                options={
+                                    "concurrency": "Concurrency — ramp parallel workers",
+                                    "payload": "Payload size — ramp array dimensions",
+                                },
+                                value=DEFAULT_RAMP_MODE,
+                                label="Ramp axis",
+                            ).props("dark dense outlined color=cyan").classes("mx-4 mb-2").style(
+                                "width: calc(100% - 2rem)"
+                            )
+                            ui.label(
+                                "Concurrency: vary workers at a fixed payload. "
+                                "Payload: vary array size at a fixed concurrency."
+                            ).classes("mx-4 mb-2 text-slate-500 text-[11px] leading-relaxed")
+
+                            ruf_toggle = ui.switch(
+                                "Stop at failure threshold",
+                            ).classes("mx-4 mb-2 text-slate-300 text-sm")
+
+                            with ui.column().classes("gap-0 w-full") as ruf_panel:
+                                threshold_input = ui.number(
+                                    label="Failure threshold (%)",
+                                    value=DEFAULT_FAILURE_THRESHOLD_PCT,
+                                    min=0.1, max=100.0, precision=1,
+                                ).props("dark dense outlined color=cyan").classes("mx-4 mb-2").style(
+                                    "width: calc(100% - 2rem)"
+                                )
+
+                                wall_time_input = ui.number(
+                                    label="Max wall time (s, 0 = unlimited)",
+                                    value=0, min=0, max=86400, precision=0,
+                                ).props("dark dense outlined color=cyan").classes("mx-4 mb-2").style(
+                                    "width: calc(100% - 2rem)"
+                                )
+
+                                conc_ceiling_input = ui.number(
+                                    label=f"Concurrency ceiling (workers, default {DEFAULT_MAX_ESCALATION_CONCURRENCY})",
+                                    value=DEFAULT_MAX_ESCALATION_CONCURRENCY,
+                                    min=1, max=65536, precision=0,
+                                ).props("dark dense outlined color=cyan").classes("mx-4 mb-2").style(
+                                    "width: calc(100% - 2rem)"
+                                )
+
+                                payload_ceiling_input = ui.number(
+                                    label=f"Payload dim ceiling (px, default {DEFAULT_MAX_ESCALATION_PAYLOAD_DIM})",
+                                    value=DEFAULT_MAX_ESCALATION_PAYLOAD_DIM,
+                                    min=512, max=131072, precision=0,
+                                ).props("dark dense outlined color=cyan").classes("mx-4 mb-2").style(
+                                    "width: calc(100% - 2rem)"
+                                )
+
+                                ui.label(
+                                    "When enabled: standard ramp runs first, then the "
+                                    "chosen dimension is doubled each step until "
+                                    "failures reach the threshold."
+                                ).classes("mx-4 mb-3 text-slate-500 text-[11px] leading-relaxed")
+
+                            ruf_panel.set_visibility(False)
+
+                            def _on_ruf_toggle(e=None) -> None:
+                                ruf_panel.set_visibility(ruf_toggle.value)
+
+                            def _on_escalate_change(e=None) -> None:
+                                # Relabel the concurrency input based on ramp mode
+                                if escalate_select.value == "payload":
+                                    conc_input._props["label"] = "Fixed concurrency (workers)"
+                                else:
+                                    conc_input._props["label"] = "Max concurrency"
+                                conc_input.update()
+
+                            ruf_toggle.on_value_change(_on_ruf_toggle)
+                            escalate_select.on_value_change(_on_escalate_change)
+
                             # Save path
                             ui.separator().classes("bg-white/5")
                             ui.label("Save").classes("text-xs text-slate-500 uppercase px-4 pt-3 pb-1")
@@ -2205,6 +2485,14 @@ def launch_stress_gui(
                                 else "medium"
                             )
                             start_conc_input.value = cfg.start_concurrency
+                            # Restore run-until-failure settings
+                            ruf_toggle.value = cfg.run_until_failure
+                            escalate_select.value = cfg.ramp_mode
+                            threshold_input.value = cfg.failure_threshold_pct
+                            wall_time_input.value = cfg.max_wall_time_s or 0
+                            conc_ceiling_input.value = cfg.max_escalation_concurrency
+                            payload_ceiling_input.value = cfg.max_escalation_payload_dim
+                            ruf_panel.set_visibility(cfg.run_until_failure)
 
                             # Select matching component if available
                             cname = rec.component_name
@@ -2212,11 +2500,11 @@ def launch_stress_gui(
                                 comp_select.value = cname
                                 _page_state["selected_component"] = cname
 
-                            # Render results
+                            # Render results (no precomputed — loaded records compute on demand)
                             _page_state["result_record"] = rec
                             results_container.clear()
                             with results_container:
-                                _render_full_report(rec)
+                                _render_full_report(rec, precomputed=None)
 
                             load_status.text = f"Loaded: {rec.component_name}"
                             load_status.classes(replace="text-xs text-emerald-400")
@@ -2302,6 +2590,7 @@ def launch_stress_gui(
 
                             # Build config
                             try:
+                                wall_t = float(wall_time_input.value or 0)
                                 config = StressTestConfig(
                                     start_concurrency=int(start_conc_input.value or DEFAULT_START_CONCURRENCY),
                                     max_concurrency=int(conc_input.value or DEFAULT_MAX_CONCURRENCY),
@@ -2309,6 +2598,13 @@ def launch_stress_gui(
                                     duration_per_step_s=float(duration_input.value or DEFAULT_DURATION_PER_STEP_S),
                                     payload_size=size_select.value,
                                     timeout_per_call_s=float(timeout_input.value or DEFAULT_TIMEOUT_PER_CALL_S),
+                                    run_until_failure=bool(ruf_toggle.value),
+                                    ramp_mode=escalate_select.value,
+                                    failure_escalation_mode=escalate_select.value,  # kept for compat
+                                    failure_threshold_pct=float(threshold_input.value or DEFAULT_FAILURE_THRESHOLD_PCT),
+                                    max_wall_time_s=wall_t if wall_t > 0 else None,
+                                    max_escalation_concurrency=int(conc_ceiling_input.value or DEFAULT_MAX_ESCALATION_CONCURRENCY),
+                                    max_escalation_payload_dim=int(payload_ceiling_input.value or DEFAULT_MAX_ESCALATION_PAYLOAD_DIM),
                                 )
                             except (ValueError, TypeError) as exc:
                                 ui.notify(f"Invalid config: {exc}", type="negative", position="top")
@@ -2339,19 +2635,72 @@ def launch_stress_gui(
                                     levels = config.concurrency_levels()
                                     state.append_log(f"Starting: {comp_name}")
                                     state.append_log(
-                                        f"Config: concurrency 1→{config.max_concurrency} "
+                                        f"Config: concurrency {config.start_concurrency}→{config.max_concurrency} "
                                         f"({len(levels)} steps), "
                                         f"{config.duration_per_step_s}s/step, "
                                         f"payload={config.payload_size}"
                                     )
                                     state.append_log(f"Concurrency levels: {levels}")
+                                    mode = config.ramp_mode
+                                    if mode == "payload":
+                                        state.append_log(
+                                            f"Ramp mode: payload — doubling array dims at "
+                                            f"{config.max_concurrency} fixed workers, "
+                                            f"starting at {config.payload_size} "
+                                            f"(ceiling: {config.max_escalation_payload_dim}px)"
+                                        )
+                                    else:
+                                        state.append_log(
+                                            f"Ramp mode: concurrency — ramping workers "
+                                            f"{config.start_concurrency}→{config.max_concurrency}"
+                                        )
+                                    if config.run_until_failure:
+                                        thresh = config.failure_threshold_pct
+                                        wall = config.max_wall_time_s
+                                        state.append_log(
+                                            f"Failure threshold: {thresh}%, "
+                                            f"wall_time={'unlimited' if wall is None else f'{wall:.0f}s'}"
+                                        )
                                     record = tester.run(config)
                                     state.record = record
+
+                                    # -------------------------------------------
+                                    # Precompute chart data in the background thread
+                                    # so the event loop never has to iterate events.
+                                    # For runs with hundreds of thousands of events
+                                    # this prevents the asyncio loop from blocking
+                                    # long enough to disconnect the browser WebSocket.
+                                    # -------------------------------------------
+                                    try:
+                                        _level_rows = _per_level_stats(record)
+                                        _payload_rows = _per_payload_stats(record)
+                                        _is_payload = _is_payload_escalation_record(record)
+                                        state.chart_data = {
+                                            "payload_mode": _is_payload,
+                                            "level_rows": _level_rows,
+                                            "payload_rows": _payload_rows,
+                                        }
+                                    except Exception as _chart_exc:
+                                        state.append_log(f"  Chart precompute warning: {_chart_exc}")
+                                        state.chart_data = None
                                     s = record.summary
                                     state.append_log("")
                                     state.append_log("Done.")
                                     state.append_log(f"  Max sustained concurrency : {s.max_sustained_concurrency}")
-                                    state.append_log(f"  Saturation                : {s.saturation_concurrency}")
+                                    if s.saturation_concurrency is not None:
+                                        state.append_log(f"  Saturation (concurrency)  : {s.saturation_concurrency} workers")
+                                    if s.saturation_payload_shape is not None:
+                                        r, c = s.saturation_payload_shape
+                                        state.append_log(f"  Saturation (payload)      : {r}×{c}")
+                                    if s.largest_successful_payload_shape is not None:
+                                        r, c = s.largest_successful_payload_shape
+                                        state.append_log(f"  Largest OK payload        : {r}×{c}")
+                                    if s.ceiling_hit:
+                                        state.append_log(
+                                            "  Ceiling hit               : yes (config limit, not machine limit)"
+                                        )
+                                    if s.wall_time_budget_exceeded:
+                                        state.append_log(f"  Wall-time budget exceeded : yes")
                                     state.append_log(f"  Total / failed calls      : {s.total_calls} / {s.failed_calls}")
                                     state.append_log(f"  P99 latency               : {_fmt_time(s.p99_latency_s)}")
                                     state.append_log(f"  Memory HWM                : {_fmt_bytes(s.memory_high_water_mark_bytes)}")
@@ -2366,7 +2715,7 @@ def launch_stress_gui(
                             thread.start()
 
                             # Timer-based polling — runs inside the page client context
-                            poll_state = {"last_idx": 0, "timer": None}
+                            poll_state = {"last_idx": 0, "timer": None, "done": False}
 
                             def _poll_tick() -> None:
                                 # Stream new log lines
@@ -2378,6 +2727,15 @@ def launch_stress_gui(
 
                                 if state.running:
                                     return  # keep ticking
+
+                                # Guard: ensure the completion block runs exactly once.
+                                # NiceGUI timer cancellation is async; a stale tick can fire
+                                # before the cancel takes full effect.  A second execution
+                                # would call results_container.clear() on already-rendered
+                                # content and block the event loop with a redundant save.
+                                if poll_state["done"]:
+                                    return
+                                poll_state["done"] = True
 
                                 # Run complete — cancel timer and finalise UI
                                 if poll_state["timer"] is not None:
@@ -2404,49 +2762,78 @@ def launch_stress_gui(
                                 )
                                 progress_label.classes(replace="text-emerald-400 text-sm")
 
-                                # Auto-save
-                                try:
-                                    rid = store_obj.save(record)
-                                    saved_path = (
-                                        save_dir / "stress" / "records" / f"{rid}.json"
-                                    )
+                                # The record is already persisted by ComponentStressTester.run()
+                                # (via BaseStressTester.run → self._store.save(record)) in the
+                                # background thread.  DO NOT call store_obj.save(record) here —
+                                # for large run-until-failure records (millions of events) that
+                                # JSON serialisation can take many seconds and blocks the asyncio
+                                # event loop, starving the WebSocket heartbeat and causing the
+                                # browser to reconnect to a blank page.
+                                saved_path = (
+                                    save_dir / "stress" / "records"
+                                    / f"{record.stress_test_id}.json"
+                                )
+                                if saved_path.exists():
                                     log_el.push(f"Saved: {saved_path}")
                                     ui.notify(
                                         f"Report saved: {saved_path.name}",
                                         type="positive", position="top",
                                     )
-                                except Exception as exc:
-                                    ui.notify(f"Save failed: {exc}", type="warning", position="top")
+                                else:
+                                    ui.notify(
+                                        "Run complete (auto-save may still be in progress).",
+                                        type="info", position="top",
+                                    )
 
-                                # Render results inline
-                                results_container.clear()
-                                with results_container:
-                                    _render_full_report(record)
+                                # Render results inline — wrapped so that a render exception
+                                # never leaves results_container in a cleared-but-empty state.
+                                try:
+                                    results_container.clear()
+                                    with results_container:
+                                        _render_full_report(record, precomputed=state.chart_data)
 
-                                    with ui.row().classes("gap-2 mt-2 items-start"):
-                                        _rec = record  # capture for closure
-                                        manual_save_input = ui.input(
-                                            label="Save JSON to path",
-                                            value=str(
-                                                save_dir / "stress" / "records"
-                                                / f"{_rec.stress_test_id}.json"
-                                            ),
-                                        ).props("dark dense outlined color=cyan").classes("w-96 text-xs")
+                                        with ui.row().classes("gap-2 mt-2 items-start"):
+                                            _rec = record  # capture for closure
+                                            manual_save_input = ui.input(
+                                                label="Save JSON to path",
+                                                value=str(saved_path),
+                                            ).props("dark dense outlined color=cyan").classes("w-96 text-xs")
 
-                                        def _manual_save(_r=_rec, _inp=manual_save_input) -> None:
-                                            p = Path(_inp.value.strip())
-                                            try:
-                                                p.parent.mkdir(parents=True, exist_ok=True)
-                                                p.write_text(_r.to_json(), encoding="utf-8")
-                                                ui.notify(f"Saved to {p}", type="positive", position="top")
-                                            except Exception as ex:
-                                                ui.notify(f"Save failed: {ex}", type="negative", position="top")
+                                            def _manual_save(_r=_rec, _inp=manual_save_input) -> None:
+                                                p = Path(_inp.value.strip())
+                                                try:
+                                                    p.parent.mkdir(parents=True, exist_ok=True)
+                                                    p.write_text(_r.to_json(), encoding="utf-8")
+                                                    ui.notify(f"Saved to {p}", type="positive", position="top")
+                                                except Exception as ex:
+                                                    ui.notify(f"Save failed: {ex}", type="negative", position="top")
 
-                                        ui.button(
-                                            "Save JSON", icon="save", on_click=_manual_save,
-                                        ).props("flat").classes(
-                                            "bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/30"
-                                        )
+                                            ui.button(
+                                                "Save JSON", icon="save", on_click=_manual_save,
+                                            ).props("flat").classes(
+                                                "bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/30"
+                                            )
+                                except Exception as render_exc:
+                                    # If rendering fails for any reason, show an error card
+                                    # rather than leaving the page blank.
+                                    results_container.clear()
+                                    with results_container:
+                                        with ui.card().classes(
+                                            "w-full bg-red-900/30 ring-1 ring-red-500/30"
+                                        ).props("flat"):
+                                            ui.label("Result rendering failed").classes(
+                                                "text-red-400 font-semibold text-sm"
+                                            )
+                                            ui.label(str(render_exc)).classes(
+                                                "text-red-300 text-xs font-mono mt-1"
+                                            )
+                                            ui.label(
+                                                f"The record was saved to: {saved_path}"
+                                            ).classes("text-slate-400 text-xs mt-2")
+                                    ui.notify(
+                                        f"Render error: {render_exc}",
+                                        type="negative", position="top",
+                                    )
 
                             poll_state["timer"] = ui.timer(0.5, _poll_tick)
 

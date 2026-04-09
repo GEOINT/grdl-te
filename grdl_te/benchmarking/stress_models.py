@@ -52,8 +52,18 @@ from grdl_te.benchmarking.models import HardwareSnapshot
 # ---------------------------------------------------------------------------
 # Schema version
 # ---------------------------------------------------------------------------
-STRESS_SCHEMA_VERSION: int = 1
-"""Increment this whenever the ``StressTestRecord`` on-disk schema changes."""
+STRESS_SCHEMA_VERSION: int = 2
+"""Increment this whenever the ``StressTestRecord`` on-disk schema changes.
+
+Changelog
+---------
+2 : Added ``run_until_failure``, ``failure_escalation_mode``,
+    ``failure_threshold_pct``, ``max_wall_time_s`` to ``StressTestConfig``;
+    added ``wall_time_budget_exceeded`` and ``saturation_payload_shape`` to
+    ``StressTestSummary``.
+3 : Added ``ramp_mode`` to ``StressTestConfig`` as the canonical ramp-axis
+    selector (supersedes ``failure_escalation_mode`` which is now legacy).
+"""
 
 # ---------------------------------------------------------------------------
 # Default configuration constants
@@ -64,6 +74,18 @@ DEFAULT_RAMP_STEPS: int = 5
 DEFAULT_DURATION_PER_STEP_S: float = 10.0
 DEFAULT_PAYLOAD_SIZE: str = "medium"
 DEFAULT_TIMEOUT_PER_CALL_S: float = 30.0
+DEFAULT_RUN_UNTIL_FAILURE: bool = False
+DEFAULT_FAILURE_ESCALATION_MODE: str = "concurrency"  # legacy name kept for old JSON compat
+DEFAULT_RAMP_MODE: str = "concurrency"
+"""Primary ramp axis: ``"concurrency"`` or ``"payload"``."""
+DEFAULT_FAILURE_THRESHOLD_PCT: float = 10.0
+DEFAULT_MAX_WALL_TIME_S: Optional[float] = None
+DEFAULT_MAX_ESCALATION_CONCURRENCY: int = 512
+"""Default hard ceiling for concurrency escalation (workers)."""
+DEFAULT_MAX_ESCALATION_PAYLOAD_DIM: int = 16384
+"""Default hard ceiling for payload escalation (linear dimension in pixels)."""
+
+_SENTINEL = object()  # used to detect "not provided" for Optional[int] fields
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +116,39 @@ class StressTestConfig:
     timeout_per_call_s : float
         Maximum seconds allowed for a single call.  Calls that exceed
         this are recorded as ``TimeoutError`` events.
+    run_until_failure : bool
+        When ``True``, the runner continues escalating the chosen
+        dimension past *max_concurrency* (or the base payload size)
+        after the standard ramp finishes, until
+        *failure_threshold_pct* % of calls fail at a level or
+        *max_wall_time_s* is exceeded.  Exactly one escalation axis is
+        active at a time; see *failure_escalation_mode*.
+    ramp_mode : str
+        Primary ramp axis.  ``"concurrency"`` (default) runs the standard
+        worker-count ramp at a fixed payload size.  ``"payload"`` fixes
+        concurrency at *max_concurrency* and ramps payload size geometrically,
+        skipping the worker ramp entirely.  When *run_until_failure* is
+        ``True`` this becomes the escalation axis.  Supersedes the legacy
+        ``failure_escalation_mode`` field.
+    failure_threshold_pct : float
+        Percentage of calls at a level that must fail before the runner
+        declares saturation and stops.  Default 10 — one call in ten
+        failing is a meaningful reliability boundary.
+    max_wall_time_s : float, optional
+        Hard budget for total run time across all steps (including the
+        normal ramp and the escalation phase).  ``None`` means the run
+        is bounded only by the configured ceilings.
+    max_escalation_concurrency : int
+        Hard ceiling for the number of concurrent workers when
+        ``failure_escalation_mode='concurrency'``.  The runner will
+        never exceed this regardless of how many doublings it takes.
+        Default ``512``.  Set lower if your machine has fewer cores or
+        you want faster results.
+    max_escalation_payload_dim : int
+        Hard ceiling on the linear dimension (rows and cols) of the
+        payload array when ``failure_escalation_mode='payload'``.
+        A ``16384×16384`` float32 array occupies ~1 GB; reduce this
+        if you want to protect available RAM.  Default ``16384``.
     """
 
     start_concurrency: int = DEFAULT_START_CONCURRENCY
@@ -102,6 +157,13 @@ class StressTestConfig:
     duration_per_step_s: float = DEFAULT_DURATION_PER_STEP_S
     payload_size: str = DEFAULT_PAYLOAD_SIZE
     timeout_per_call_s: float = DEFAULT_TIMEOUT_PER_CALL_S
+    run_until_failure: bool = DEFAULT_RUN_UNTIL_FAILURE
+    failure_escalation_mode: str = DEFAULT_FAILURE_ESCALATION_MODE  # legacy; use ramp_mode
+    ramp_mode: str = DEFAULT_RAMP_MODE
+    failure_threshold_pct: float = DEFAULT_FAILURE_THRESHOLD_PCT
+    max_wall_time_s: Optional[float] = DEFAULT_MAX_WALL_TIME_S
+    max_escalation_concurrency: int = DEFAULT_MAX_ESCALATION_CONCURRENCY
+    max_escalation_payload_dim: int = DEFAULT_MAX_ESCALATION_PAYLOAD_DIM
 
     def __post_init__(self) -> None:
         if self.start_concurrency < 1:
@@ -124,6 +186,35 @@ class StressTestConfig:
         if self.timeout_per_call_s <= 0:
             raise ValueError(
                 f"timeout_per_call_s must be > 0, got {self.timeout_per_call_s}"
+            )
+        if self.failure_escalation_mode not in ("concurrency", "payload"):
+            raise ValueError(
+                f"failure_escalation_mode must be 'concurrency' or 'payload', "
+                f"got {self.failure_escalation_mode!r}"
+            )
+        if self.ramp_mode not in ("concurrency", "payload"):
+            raise ValueError(
+                f"ramp_mode must be 'concurrency' or 'payload', "
+                f"got {self.ramp_mode!r}"
+            )
+        if not (0.0 < self.failure_threshold_pct <= 100.0):
+            raise ValueError(
+                f"failure_threshold_pct must be in (0, 100], "
+                f"got {self.failure_threshold_pct}"
+            )
+        if self.max_wall_time_s is not None and self.max_wall_time_s <= 0:
+            raise ValueError(
+                f"max_wall_time_s must be > 0, got {self.max_wall_time_s}"
+            )
+        if self.max_escalation_concurrency < 1:
+            raise ValueError(
+                f"max_escalation_concurrency must be >= 1, "
+                f"got {self.max_escalation_concurrency}"
+            )
+        if self.max_escalation_payload_dim < 1:
+            raise ValueError(
+                f"max_escalation_payload_dim must be >= 1, "
+                f"got {self.max_escalation_payload_dim}"
             )
 
     def concurrency_levels(self) -> List[int]:
@@ -158,14 +249,24 @@ class StressTestConfig:
         -------
         Dict[str, Any]
         """
-        return {
+        d: Dict[str, Any] = {
             "start_concurrency": self.start_concurrency,
             "max_concurrency": self.max_concurrency,
             "ramp_steps": self.ramp_steps,
             "duration_per_step_s": self.duration_per_step_s,
             "payload_size": self.payload_size,
             "timeout_per_call_s": self.timeout_per_call_s,
+            "ramp_mode": self.ramp_mode,
         }
+        if self.run_until_failure:
+            d["run_until_failure"] = True
+            d["failure_escalation_mode"] = self.ramp_mode  # legacy compat
+            d["failure_threshold_pct"] = self.failure_threshold_pct
+            d["max_escalation_concurrency"] = self.max_escalation_concurrency
+            d["max_escalation_payload_dim"] = self.max_escalation_payload_dim
+        if self.max_wall_time_s is not None:
+            d["max_wall_time_s"] = self.max_wall_time_s
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "StressTestConfig":
@@ -193,6 +294,28 @@ class StressTestConfig:
             payload_size=data.get("payload_size", DEFAULT_PAYLOAD_SIZE),
             timeout_per_call_s=data.get(
                 "timeout_per_call_s", DEFAULT_TIMEOUT_PER_CALL_S
+            ),
+            run_until_failure=data.get(
+                "run_until_failure", DEFAULT_RUN_UNTIL_FAILURE
+            ),
+            failure_escalation_mode=data.get(
+                "failure_escalation_mode", DEFAULT_FAILURE_ESCALATION_MODE
+            ),
+            ramp_mode=data.get(
+                "ramp_mode",
+                data.get("failure_escalation_mode", DEFAULT_RAMP_MODE),
+            ),
+            failure_threshold_pct=data.get(
+                "failure_threshold_pct", DEFAULT_FAILURE_THRESHOLD_PCT
+            ),
+            max_wall_time_s=data.get(
+                "max_wall_time_s", DEFAULT_MAX_WALL_TIME_S
+            ),
+            max_escalation_concurrency=data.get(
+                "max_escalation_concurrency", DEFAULT_MAX_ESCALATION_CONCURRENCY
+            ),
+            max_escalation_payload_dim=data.get(
+                "max_escalation_payload_dim", DEFAULT_MAX_ESCALATION_PAYLOAD_DIM
             ),
         )
 
@@ -384,6 +507,12 @@ class StressTestSummary:
     total_calls: int
     failed_calls: int
     p99_latency_s: float
+    wall_time_budget_exceeded: bool = False
+    saturation_payload_shape: Optional[Tuple[int, int]] = None
+    ceiling_hit: bool = False
+    """True when run-until-failure reached the configured ceiling without finding a failure."""
+    largest_successful_payload_shape: Optional[Tuple[int, int]] = None
+    """Largest payload that completed with < failure_threshold_pct errors (payload mode only)."""
 
     @classmethod
     def from_events(
@@ -454,6 +583,8 @@ class StressTestSummary:
             total_calls=total,
             failed_calls=failed,
             p99_latency_s=p99,
+            # wall_time_budget_exceeded and saturation_payload_shape are set
+            # by the runner after from_events(); defaults are safe here.
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -463,7 +594,7 @@ class StressTestSummary:
         -------
         Dict[str, Any]
         """
-        return {
+        d: Dict[str, Any] = {
             "max_sustained_concurrency": self.max_sustained_concurrency,
             "saturation_concurrency": self.saturation_concurrency,
             "first_failure_mode": self.first_failure_mode,
@@ -472,6 +603,15 @@ class StressTestSummary:
             "failed_calls": self.failed_calls,
             "p99_latency_s": self.p99_latency_s,
         }
+        if self.wall_time_budget_exceeded:
+            d["wall_time_budget_exceeded"] = True
+        if self.saturation_payload_shape is not None:
+            d["saturation_payload_shape"] = list(self.saturation_payload_shape)
+        if self.ceiling_hit:
+            d["ceiling_hit"] = True
+        if self.largest_successful_payload_shape is not None:
+            d["largest_successful_payload_shape"] = list(self.largest_successful_payload_shape)
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "StressTestSummary":
@@ -485,6 +625,8 @@ class StressTestSummary:
         -------
         StressTestSummary
         """
+        sat_shape = data.get("saturation_payload_shape")
+        lsp_shape = data.get("largest_successful_payload_shape")
         return cls(
             max_sustained_concurrency=data["max_sustained_concurrency"],
             saturation_concurrency=data.get("saturation_concurrency"),
@@ -495,6 +637,14 @@ class StressTestSummary:
             total_calls=data["total_calls"],
             failed_calls=data["failed_calls"],
             p99_latency_s=data.get("p99_latency_s", 0.0),
+            wall_time_budget_exceeded=data.get("wall_time_budget_exceeded", False),
+            saturation_payload_shape=(
+                tuple(sat_shape) if sat_shape is not None else None
+            ),
+            ceiling_hit=data.get("ceiling_hit", False),
+            largest_successful_payload_shape=(
+                tuple(lsp_shape) if lsp_shape is not None else None
+            ),
         )
 
 

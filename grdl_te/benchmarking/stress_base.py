@@ -34,8 +34,9 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FuturesTimeout
+from dataclasses import replace as _dataclass_replace
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Third-party
 import numpy as np
@@ -49,6 +50,7 @@ from grdl_te.benchmarking.stress_models import (
     StressTestConfig,
     StressTestEvent,
     StressTestRecord,
+    StressTestSummary,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,9 +108,47 @@ def _resolve_payload_shape(payload_size: str) -> Tuple[int, int]:
 
 
 # ---------------------------------------------------------------------------
-# Maximum consecutive failures before early abort
+# Maximum consecutive failures before early abort within a single level
 # ---------------------------------------------------------------------------
 _MAX_CONSECUTIVE_FAILURES = 3
+
+
+def _payload_escalation_sequence(
+    base_shape: Tuple[int, int],
+    max_dim: int,
+) -> List[Tuple[int, int]]:
+    """Generate shapes for payload escalation, doubling dimensions each step.
+
+    Starts one doubling above *base_shape* and continues until *max_dim*
+    is reached.
+
+    Parameters
+    ----------
+    base_shape : Tuple[int, int]
+        The *(rows, cols)* shape used during the normal ramp.  The first
+        escalation step will be ``(rows*2, cols*2)``.
+    max_dim : int
+        Hard ceiling on the linear dimension.  Shapes will not exceed
+        ``(max_dim, max_dim)``.
+
+    Returns
+    -------
+    List[Tuple[int, int]]
+        Ordered list of shapes to probe, smallest first.
+    """
+    rows, cols = base_shape
+    shapes: List[Tuple[int, int]] = []
+    while True:
+        rows = min(rows * 2, max_dim)
+        cols = min(cols * 2, max_dim)
+        shapes.append((rows, cols))
+        if rows >= max_dim and cols >= max_dim:
+            break
+    return shapes
+
+
+def _fmt_shape(shape: Tuple[int, int]) -> str:
+    return f"{shape[0]}\u00d7{shape[1]}"
 
 
 class BaseStressTester(ABC):
@@ -222,35 +262,120 @@ class BaseStressTester(ABC):
 
         all_events: List[StressTestEvent] = []
         failure_points: List[FailurePoint] = []
+        run_start = time.monotonic()
 
-        levels = config.concurrency_levels()
-        logger.info(
-            "Starting stress ramp for '%s': levels=%s, "
-            "duration_per_step_s=%.1f, payload=%s",
-            self.component_name,
-            levels,
-            config.duration_per_step_s,
-            payload_shape,
-        )
+        # ── Choose ramp axis ──────────────────────────────────────────────
+        # ramp_mode="concurrency" (default): run the concurrency ramp at a fixed
+        # payload, then optionally escalate workers further if run_until_failure.
+        # ramp_mode="payload": skip the concurrency ramp; ramp payload sizes
+        # geometrically at a fixed concurrency level.  When run_until_failure is
+        # True, stop at the failure threshold; otherwise run all sizes.
+        payload_ramp_mode = config.ramp_mode == "payload"
 
-        for concurrency in levels:
-            events, fp = self._run_level(
-                concurrency=concurrency,
-                payload=payload,
-                config=config,
+        wall_time_budget_exceeded = False
+        saturation_payload_shape = None
+        ceiling_hit = False
+        largest_successful_payload_shape = None
+
+        if not payload_ramp_mode:
+            # ── Concurrency ramp ──────────────────────────────────────────
+            levels = config.concurrency_levels()
+            logger.info(
+                "Starting concurrency stress ramp for '%s': levels=%s, "
+                "duration_per_step_s=%.1f, payload=%s",
+                self.component_name,
+                levels,
+                config.duration_per_step_s,
+                payload_shape,
             )
-            all_events.extend(events)
-            if fp is not None:
-                failure_points.append(fp)
 
-            # Early abort on catastrophic failure (OOM, etc.)
-            if fp is not None and fp.error_type in ("MemoryError", "OSError"):
-                logger.warning(
-                    "Early abort at concurrency=%d: %s",
-                    concurrency,
-                    fp.error_type,
+            for concurrency in levels:
+                # Honour wall-time budget
+                if config.max_wall_time_s is not None:
+                    elapsed = time.monotonic() - run_start
+                    if elapsed >= config.max_wall_time_s:
+                        logger.warning(
+                            "Wall-time budget (%.0fs) exceeded before completing "
+                            "standard ramp at concurrency=%d.",
+                            config.max_wall_time_s, concurrency,
+                        )
+                        break
+
+                events, fp = self._run_level(
+                    concurrency=concurrency,
+                    payload=payload,
+                    config=config,
+                    wall_start=run_start,
                 )
-                break
+                all_events.extend(events)
+                if fp is not None:
+                    failure_points.append(fp)
+
+                # Early abort on catastrophic failure (OOM, etc.)
+                if fp is not None and fp.error_type in ("MemoryError", "OSError"):
+                    logger.warning(
+                        "Early abort at concurrency=%d: %s",
+                        concurrency,
+                        fp.error_type,
+                    )
+                    break
+
+            # Optional concurrency escalation after the ramp
+            if config.run_until_failure and not failure_points:
+                (
+                    extra_events,
+                    extra_fps,
+                    wall_time_budget_exceeded,
+                    ceiling_hit,
+                ) = self._escalate_concurrency(
+                    config=config,
+                    payload=payload,
+                    levels_done=levels,
+                    run_start=run_start,
+                )
+                all_events.extend(extra_events)
+                failure_points.extend(extra_fps)
+
+        else:
+            # ── Payload ramp ──────────────────────────────────────────────
+            # Skip the concurrency loop; probe payload sizes geometrically at
+            # fixed concurrency (config.max_concurrency).
+            # When run_until_failure=False, use threshold=100 so all sizes run.
+            levels = []  # no concurrency levels for logging
+            logger.info(
+                "Starting payload stress ramp for '%s': "
+                "starting shape=%s, concurrency=%d, "
+                "run_until_failure=%s",
+                self.component_name,
+                payload_shape,
+                config.max_concurrency,
+                config.run_until_failure,
+            )
+
+            # Start one half-step below payload_size so the sequence begins AT
+            # the configured payload_size (sequence doubles each step).
+            half_shape = (max(1, payload_shape[0] // 2), max(1, payload_shape[1] // 2))
+
+            if config.run_until_failure:
+                _eff_config = config
+            else:
+                # 100% threshold means the run always completes all steps
+                _eff_config = _dataclass_replace(config, failure_threshold_pct=100.0)
+
+            (
+                extra_events,
+                extra_fps,
+                saturation_payload_shape,
+                largest_successful_payload_shape,
+                wall_time_budget_exceeded,
+                ceiling_hit,
+            ) = self._escalate_payload(
+                config=_eff_config,
+                base_shape=half_shape,
+                run_start=run_start,
+            )
+            all_events.extend(extra_events)
+            failure_points.extend(extra_fps)
 
         record = StressTestRecord.create(
             component_name=self.component_name,
@@ -263,6 +388,17 @@ class BaseStressTester(ABC):
             tags=self._tags,
         )
 
+        # Patch extra escalation-phase metadata into the frozen summary
+        if wall_time_budget_exceeded or saturation_payload_shape is not None \
+                or ceiling_hit or largest_successful_payload_shape is not None:
+            record.summary = _dataclass_replace(
+                record.summary,
+                wall_time_budget_exceeded=wall_time_budget_exceeded,
+                saturation_payload_shape=saturation_payload_shape,
+                ceiling_hit=ceiling_hit,
+                largest_successful_payload_shape=largest_successful_payload_shape,
+            )
+
         if self._store is not None:
             try:
                 self._store.save(record)
@@ -271,11 +407,190 @@ class BaseStressTester(ABC):
 
         return record
 
+    # ------------------------------------------------------------------
+    # Escalation helpers (run_until_failure phases)
+    # ------------------------------------------------------------------
+
+    def _escalate_concurrency(
+        self,
+        config: StressTestConfig,
+        payload: np.ndarray,
+        levels_done: List[int],
+        run_start: float,
+    ) -> Tuple[List[StressTestEvent], List[FailurePoint], bool, bool]:
+        """Continue doubling concurrency past ``config.max_concurrency``.
+
+        Returns
+        -------
+        extra_events, extra_fps, wall_time_budget_exceeded, ceiling_hit
+        """
+        extra_events: List[StressTestEvent] = []
+        extra_fps: List[FailurePoint] = []
+        wall_exceeded = False
+        ceiling_hit = False
+
+        # Build escalation levels: double from last level done
+        concurrency = max(levels_done) if levels_done else config.max_concurrency
+        ceiling = config.max_escalation_concurrency
+
+        logger.info(
+            "'%s' run_until_failure=concurrency: escalating from %d to ceiling=%d",
+            self.component_name, concurrency, ceiling,
+        )
+
+        while True:
+            concurrency = min(concurrency * 2, ceiling)
+
+            if config.max_wall_time_s is not None:
+                elapsed = time.monotonic() - run_start
+                if elapsed >= config.max_wall_time_s:
+                    logger.warning(
+                        "'%s' wall-time budget (%.0fs) exceeded during "
+                        "concurrency escalation at level=%d.",
+                        self.component_name, config.max_wall_time_s, concurrency,
+                    )
+                    wall_exceeded = True
+                    break
+
+            logger.info("  escalating concurrency → %d workers", concurrency)
+            events, fp = self._run_level(
+                concurrency=concurrency,
+                payload=payload,
+                config=config,
+                wall_start=run_start,
+            )
+            extra_events.extend(events)
+
+            if fp is not None:
+                extra_fps.append(fp)
+                # Check if failure threshold reached
+                total = len(events)
+                failed = sum(1 for e in events if not e.success)
+                pct = failed / total * 100.0 if total > 0 else 0.0
+                if pct >= config.failure_threshold_pct:
+                    logger.info(
+                        "  saturation reached at concurrency=%d (%.1f%% failures)",
+                        concurrency, pct,
+                    )
+                    break
+
+            if concurrency >= ceiling:
+                logger.info(
+                    "  concurrency ceiling (%d workers) reached without saturation — "
+                    "this is a configured hard limit, not a machine limit.",
+                    ceiling,
+                )
+                ceiling_hit = True
+                break
+
+        return extra_events, extra_fps, wall_exceeded, ceiling_hit
+
+    def _escalate_payload(
+        self,
+        config: StressTestConfig,
+        base_shape: Tuple[int, int],
+        run_start: float,
+    ) -> Tuple[List[StressTestEvent], List[FailurePoint], Optional[Tuple[int, int]], Optional[Tuple[int, int]], bool, bool]:
+        """Fix concurrency at ``max_concurrency`` and escalate payload size.
+
+        Returns
+        -------
+        extra_events, extra_fps, saturation_payload_shape,
+        largest_successful_payload_shape, wall_time_budget_exceeded, ceiling_hit
+        """
+        extra_events: List[StressTestEvent] = []
+        extra_fps: List[FailurePoint] = []
+        saturation_shape: Optional[Tuple[int, int]] = None
+        largest_ok_shape: Optional[Tuple[int, int]] = None
+        wall_exceeded = False
+        ceiling_hit = False
+
+        concurrency = config.max_concurrency
+        max_dim = config.max_escalation_payload_dim
+        shapes = _payload_escalation_sequence(base_shape, max_dim)
+
+        logger.info(
+            "'%s' run_until_failure=payload: will probe %d shapes up to %s "
+            "at concurrency=%d",
+            self.component_name,
+            len(shapes),
+            _fmt_shape(shapes[-1]) if shapes else "?",
+            concurrency,
+        )
+
+        rng = np.random.default_rng(99)
+
+        for shape in shapes:
+            if config.max_wall_time_s is not None:
+                elapsed = time.monotonic() - run_start
+                if elapsed >= config.max_wall_time_s:
+                    logger.warning(
+                        "'%s' wall-time budget (%.0fs) exceeded during "
+                        "payload escalation at shape=%s.",
+                        self.component_name, config.max_wall_time_s, _fmt_shape(shape),
+                    )
+                    wall_exceeded = True
+                    break
+
+            megapixels = shape[0] * shape[1] / 1_000_000
+            mb = shape[0] * shape[1] * 4 / 1_048_576  # float32 = 4 bytes
+            logger.info(
+                "  probing payload %s (%.1f MP, %.0f MB)",
+                _fmt_shape(shape), megapixels, mb,
+            )
+            try:
+                escalated_payload = rng.standard_normal(shape).astype(np.float32)
+            except MemoryError:
+                logger.warning(
+                    "  OOM allocating payload %s — stopping escalation.", _fmt_shape(shape)
+                )
+                break
+
+            events, fp = self._run_level(
+                concurrency=concurrency,
+                payload=escalated_payload,
+                config=config,
+                wall_start=run_start,
+            )
+            extra_events.extend(events)
+
+            if fp is not None:
+                extra_fps.append(fp)
+                total = len(events)
+                failed = sum(1 for e in events if not e.success)
+                pct = failed / total * 100.0 if total > 0 else 0.0
+                if pct >= config.failure_threshold_pct:
+                    saturation_shape = shape
+                    logger.info(
+                        "  payload saturation at %s (%.1f%% failures — threshold %.1f%%)",
+                        _fmt_shape(shape), pct, config.failure_threshold_pct,
+                    )
+                    break
+            else:
+                largest_ok_shape = shape
+                logger.info("  %s: OK (0 failures)", _fmt_shape(shape))
+
+            if shape[0] >= max_dim and shape[1] >= max_dim:
+                logger.info(
+                    "  payload ceiling (%s, %d px) reached without saturation — "
+                    "this is a configured hard limit, not a machine limit.",
+                    _fmt_shape(shape), max_dim,
+                )
+                ceiling_hit = True
+                break
+
+        return extra_events, extra_fps, saturation_shape, largest_ok_shape, wall_exceeded, ceiling_hit
+
+    # ------------------------------------------------------------------
+    # Level runner
+    # ------------------------------------------------------------------
+
     def _run_level(
         self,
         concurrency: int,
         payload: np.ndarray,
         config: StressTestConfig,
+        wall_start: Optional[float] = None,
     ) -> Tuple[List[StressTestEvent], Optional[FailurePoint]]:
         """Run one concurrency level for ``duration_per_step_s`` seconds.
 
@@ -290,6 +605,10 @@ class BaseStressTester(ABC):
             Read-only input array shared across workers.
         config : StressTestConfig
             Run configuration.
+        wall_start : float, optional
+            ``time.monotonic()`` value from the start of the full run.
+            When provided and ``config.max_wall_time_s`` is set, the level
+            deadline is clamped so the run never exceeds the wall budget.
 
         Returns
         -------
@@ -303,7 +622,12 @@ class BaseStressTester(ABC):
         failure_point: Optional[FailurePoint] = None
         consecutive_failures = 0
 
-        deadline = time.monotonic() + config.duration_per_step_s
+        step_deadline = time.monotonic() + config.duration_per_step_s
+        if wall_start is not None and config.max_wall_time_s is not None:
+            wall_deadline = wall_start + config.max_wall_time_s
+            deadline = min(step_deadline, wall_deadline)
+        else:
+            deadline = step_deadline
 
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
             while time.monotonic() < deadline:
