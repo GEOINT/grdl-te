@@ -129,9 +129,10 @@ def test_nisar_footprint(require_nisar_file):
 
         if hasattr(geo, 'get_footprint'):
             footprint = geo.get_footprint()
-            if footprint is not None:
-                coords = list(footprint.exterior.coords)
-                assert len(coords) >= 4
+            if footprint is not None and footprint.get('type') != 'None':
+                coords = footprint.get('coordinates')
+                if coords is not None:
+                    assert len(coords) >= 4
 
 
 @pytest.mark.slow
@@ -149,7 +150,10 @@ def test_nisar_grid_interpolation(require_nisar_file):
         test_cols = np.linspace(cols // 4, 3 * cols // 4, 5, dtype=np.float64)
         test_rows = np.full_like(test_cols, rows // 2)
 
-        lats, lons, haes = geo.image_to_latlon(test_rows, test_cols)
+        result = geo.image_to_latlon(test_rows, test_cols)
+        lats = result[:, 0]
+        lons = result[:, 1]
+        haes = result[:, 2]
         assert np.all(np.isfinite(lats)), "Non-finite latitudes"
         assert np.all(np.isfinite(lons)), "Non-finite longitudes"
 

@@ -241,7 +241,7 @@ class TestPauliLevel3:
         shh, shv, svh, svv = synthetic_quad_pol
         pauli = PauliDecomposition()
         components = pauli.decompose(shh, shv, svh, svv)
-        rgb = pauli.to_rgb(components)
+        rgb, _ = pauli.to_rgb(components)
 
         assert rgb.ndim == 3, f"RGB should be 3D, got {rgb.ndim}D"
         assert rgb.shape[0] == 3, f"First dim should be 3 (RGB), got {rgb.shape[0]}"
@@ -261,11 +261,11 @@ class TestPauliLevel3:
         components = pauli.decompose(shh, shv, svh, svv)
 
         # Test dB representation (default)
-        rgb_db = pauli.to_rgb(components, representation='db')
+        rgb_db, _ = pauli.to_rgb(components, representation='db')
         assert rgb_db.shape[0] == 3
         assert np.isfinite(rgb_db).all(), "dB RGB contains non-finite values"
 
         # Test magnitude representation
-        rgb_mag = pauli.to_rgb(components, representation='magnitude')
+        rgb_mag, _ = pauli.to_rgb(components, representation='magnitude')
         assert rgb_mag.shape[0] == 3
         assert np.isfinite(rgb_mag).all(), "Magnitude RGB contains non-finite values"
