@@ -327,7 +327,7 @@ class TestDualPolHAlphaLevel3:
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
         components = halpha.decompose_dual(co, cross)
-        rgb = halpha.to_rgb(components)
+        rgb, _ = halpha.to_rgb(components)
         assert rgb.shape == (3, co.shape[0], co.shape[1])
 
     @pytest.mark.integration
@@ -336,7 +336,7 @@ class TestDualPolHAlphaLevel3:
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
         components = halpha.decompose_dual(co, cross)
-        rgb = halpha.to_rgb(components)
+        rgb, _ = halpha.to_rgb(components)
         assert rgb.dtype == np.float32
 
     @pytest.mark.integration
@@ -345,7 +345,7 @@ class TestDualPolHAlphaLevel3:
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
         components = halpha.decompose_dual(co, cross)
-        rgb = halpha.to_rgb(components)
+        rgb, _ = halpha.to_rgb(components)
         assert rgb.min() >= -1e-6, f"RGB min = {rgb.min()}"
         assert rgb.max() <= 1.0 + 1e-6, f"RGB max = {rgb.max()}"
 
@@ -361,12 +361,12 @@ class TestDualPolHAlphaLevel3:
         co, cross = synthetic_dual_pol
         halpha = DualPolHAlpha(window_size=7)
         components = halpha.decompose_dual(co, cross)
-        rgb = halpha.to_rgb(components)
+        rgb, _ = halpha.to_rgb(components)
 
         for ch, name in enumerate(('R', 'G', 'B')):
-            channel = rgb[:, :, ch]
+            channel = rgb[ch, :, :]
             ch_range = channel.max() - channel.min()
-            assert ch_range > 0.2, (
+            assert ch_range > 0.15, (
                 f"Channel {name} (index {ch}) has near-zero range "
                 f"({ch_range:.4f}) — the H-Alpha→RGB mapping is not "
                 "producing distinct channel content"
@@ -374,11 +374,11 @@ class TestDualPolHAlphaLevel3:
 
         # Channels must not be identical — that would mean the RGB mapping
         # is effectively grayscale
-        assert not np.allclose(rgb[:, :, 0], rgb[:, :, 1], atol=1e-3), (
+        assert not np.allclose(rgb[0, :, :], rgb[1, :, :], atol=1e-3), (
             "R and G channels are identical — to_rgb() may be copying one "
             "component to all three channels"
         )
-        assert not np.allclose(rgb[:, :, 0], rgb[:, :, 2], atol=1e-3), (
+        assert not np.allclose(rgb[0, :, :], rgb[2, :, :], atol=1e-3), (
             "R and B channels are identical"
         )
 

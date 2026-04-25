@@ -375,7 +375,7 @@ class TestLocalCatalogAddition:
             dtype="uint8",
         )
         cat.add(result)
-        retrieved = cat.get("/tmp/test1.tif")
+        retrieved = cat.get(result.filepath)
         assert retrieved is result
 
     def test_catalog_add_batch_results(self):
@@ -393,7 +393,7 @@ class TestLocalCatalogAddition:
         ]
         cat.add_batch(results)
         for i, result in enumerate(results):
-            retrieved = cat.get(f"/tmp/test{i}.tif")
+            retrieved = cat.get(result.filepath)
             assert retrieved is result
 
     def test_catalog_get_nonexistent_returns_none(self):
