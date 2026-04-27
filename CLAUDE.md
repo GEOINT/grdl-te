@@ -3,7 +3,7 @@
 ## Project Overview
 
 
-**GRDL-TE is fully compatible with the GRDL v0.4.0 release.**
+**GRDL-TE is fully compatible with the GRDL v0.5.1 release.**
 
 GRDL-TE (GEOINT Rapid Development Library - Testing & Evaluation) is a high-fidelity validation suite that tests GRDL's IO readers against real-world remote sensing data from operational satellite platforms.
 

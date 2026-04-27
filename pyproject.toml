@@ -1,6 +1,6 @@
 [project]
 name = "grdl-te"
-version = "0.4.0"
+version = "0.4.1"
 description = "Testing and Evaluation suite for GRDL library using real-world data"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -11,7 +11,7 @@ authors = [
 ]
 
 dependencies = [
-    "grdl[all]",
+    "grdl[all]>=0.5.1",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "numpy>=1.21",
@@ -21,7 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 benchmarking = [
-    "grdl-runtime",
+    "grdl-runtime>=0.1.2",
 ]
 gui = [
     "nicegui>=1.4",
@@ -110,3 +110,4 @@ exclude_lines = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
 ]
+

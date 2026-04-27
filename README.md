@@ -1,7 +1,7 @@
 # GRDL-TE: Testing, Evaluation & Benchmarking
 
 
-**GRDL-TE is fully compatible with the [GRDL](../grdl/) v0.4.0 release.**
+**GRDL-TE is fully compatible with the [GRDL](../grdl/) v0.5.1 release.**
 
 GRDL-TE is the validation and benchmarking suite for the [GRDL](../grdl/) (GEOINT Rapid Development Library). It serves two purposes:
 
