@@ -118,6 +118,14 @@ Examples:
         "--port", type=int, default=8080,
         help="Port for the GUI dashboard (default: 8080). Used with --view.",
     )
+    parser.add_argument(
+        "--list-scenarios", action="store_true",
+        help="List registered Fit-for-Purpose evaluation scenarios and exit.",
+    )
+    parser.add_argument(
+        "--modality", type=str, default=None,
+        help="Filter scenarios by modality (e.g. SAR, MSI) with --list-scenarios.",
+    )
     return parser
 
 
@@ -182,6 +190,18 @@ def _load_records(paths: List[Path]) -> List["BenchmarkRecord"]:  # noqa: F821
 def main() -> None:
     """Parse arguments and run the benchmark suite."""
     args = _build_parser().parse_args()
+
+    if args.list_scenarios:
+        from grdl_te.evaluation import ScenarioRegistry
+
+        registry = ScenarioRegistry()
+        scenarios = registry.filter(modality=args.modality)
+        for s in scenarios:
+            print(
+                f"{s.scenario_id:42s} | {s.modality:4s} | {s.region_type:18s} | "
+                f"{s.signature_type:28s} | {s.evaluation_task.value}"
+            )
+        sys.exit(0)
 
     if args.view:
         records = _load_records([Path(p) for p in args.view])

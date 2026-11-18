@@ -1,0 +1,25 @@
+scenario_id: sar_geolocation_calibration_array
+name: SAR Corner Reflector Geolocation Accuracy
+description: >
+  Evaluates sensor geolocation models against surveyed trihedral corner
+  reflector coordinates (horizontal RMSE, CE50, CE90, LE90, directional bias).
+modality: SAR
+region_type: calibration_range
+signature_type: trihedral_corner_reflector
+evaluation_task: geolocation
+tags:
+  - geolocation
+  - ce90
+  - le90
+  - calibration
+dataset:
+  reader_class: grdl.IO.sar.SICDReader
+ground_truth:
+  path: ground_truth.geojson
+  format: geojson
+  coordinate_system: wgs84
+  label_property: class
+acceptance_thresholds:
+  max_ce90_m: 5.0
+  max_le90_m: 5.0
+

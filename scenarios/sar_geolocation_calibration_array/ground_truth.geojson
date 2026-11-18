@@ -1,0 +1,21 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-75.750000, 36.010000] },
+      "properties": { "id": "cr_01", "class": "trihedral_corner_reflector", "pixel_row": 250.0, "pixel_col": 300.0, "hae": 12.0 }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-75.740000, 36.020000] },
+      "properties": { "id": "cr_02", "class": "trihedral_corner_reflector", "pixel_row": 750.0, "pixel_col": 800.0, "hae": 14.5 }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-75.730000, 36.015000] },
+      "properties": { "id": "cr_03", "class": "trihedral_corner_reflector", "pixel_row": 1250.0, "pixel_col": 1300.0, "hae": 11.0 }
+    }
+  ]
+}
+

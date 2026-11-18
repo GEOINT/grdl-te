@@ -1,0 +1,28 @@
+scenario_id: eo_msi_vegetation_water_segmentation
+name: EO/MSI Coastal Vegetation & Water Segmentation
+description: >
+  Evaluates multispectral index and land-cover segmentation workflows against
+  labeled coastal vegetation and water polygons using IoU, Dice/F1, and Kappa.
+modality: MSI
+region_type: coastal_temperate
+signature_type: land_cover_classes
+evaluation_task: segmentation
+tags:
+  - msi
+  - ndvi
+  - ndwi
+  - segmentation
+dataset:
+  reader_class: grdl.IO.GeoTIFFReader
+  image_shape: [128, 128]
+ground_truth:
+  path: ground_truth.geojson
+  format: geojson
+  coordinate_system: pixel
+  min_iou: 0.70
+  label_property: class
+acceptance_thresholds:
+  min_mean_iou: 0.75
+  min_overall_accuracy: 0.85
+  min_cohens_kappa: 0.70
+

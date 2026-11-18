@@ -1,0 +1,26 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-75.7800, 36.0200] },
+      "properties": { "id": "vessel_01", "class": "maritime_vessel", "length_m": 180.0, "rcs_dbsm": 32.0 }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-75.7650, 36.0280] },
+      "properties": { "id": "vessel_02", "class": "maritime_vessel", "length_m": 95.0, "rcs_dbsm": 24.5 }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-75.7520, 36.0150] },
+      "properties": { "id": "vessel_03", "class": "maritime_vessel", "length_m": 45.0, "rcs_dbsm": 16.0 }
+    },
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [-75.7410, 36.0340] },
+      "properties": { "id": "vessel_04", "class": "maritime_vessel", "length_m": 220.0, "rcs_dbsm": 35.0 }
+    }
+  ]
+}
+

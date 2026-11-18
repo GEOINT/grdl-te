@@ -1,0 +1,30 @@
+scenario_id: sar_speckle_homogeneous_clutter
+name: SAR Speckle Suppression & Edge Preservation
+description: >
+  Evaluates SAR speckle filters (Lee, Frost, Kuan, Boxcar, Wishart) on
+  homogeneous clutter ENL, Speckle Suppression Index (SSI), mean radiometric
+  preservation, Edge Preservation Index (EPI), and Target-Clutter CNR.
+modality: SAR
+region_type: agricultural
+signature_type: homogeneous_roi_and_edges
+evaluation_task: radiometric_quality
+tags:
+  - speckle
+  - radiometric
+  - enl
+  - epi
+dataset:
+  image_shape: [256, 256]
+  collection_params:
+    nominal_looks: 1
+ground_truth:
+  path: ground_truth.geojson
+  format: geojson
+  coordinate_system: pixel
+  label_property: roi_type
+acceptance_thresholds:
+  min_enl: 3.0
+  max_ssi: 0.75
+  max_mean_preservation_bias: 0.10
+  min_epi: 0.40
+

@@ -1,0 +1,30 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[10, 10], [100, 10], [100, 100], [10, 100], [10, 10]]]
+      },
+      "properties": { "roi_type": "homogeneous", "name": "uniform_clutter_nw" }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[140, 140], [240, 140], [240, 240], [140, 240], [140, 140]]]
+      },
+      "properties": { "roi_type": "homogeneous", "name": "uniform_clutter_se" }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[118, 20], [138, 20], [138, 236], [118, 236], [118, 20]]]
+      },
+      "properties": { "roi_type": "edge", "name": "step_boundary_ns" }
+    }
+  ]
+}
+

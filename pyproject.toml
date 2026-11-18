@@ -11,10 +11,14 @@ authors = [
 ]
 
 dependencies = [
-    "grdl[all]>=0.5.1",
+    "grdl[all]>=0.8.1",
+    "grdl-sar>=0.1.0",
+    "grdl-eo>=0.1.0",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "numpy>=1.21",
+    "scipy>=1.11.0",
+    "pyyaml>=6.0",
     "h5py>=3.0",
     "rasterio>=1.3",
 ]
@@ -36,7 +40,7 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
-testpaths = ["tests/validation", "tests/benchmarking"]
+testpaths = ["tests/validation", "tests/benchmarking", "tests/evaluation"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
