@@ -159,8 +159,16 @@ class TestDetectBackend:
 
     def test_fallback_to_torch_when_no_numba(self, monkeypatch):
         """When only torch is available (no numba), auto selects torch."""
+        from types import SimpleNamespace
+
         monkeypatch.setattr(_accel, '_NUMBA_AVAILABLE', False)
         monkeypatch.setattr(_accel, '_TORCH_AVAILABLE', True)
+        if _accel.torch is None:
+            fake_torch = SimpleNamespace(
+                cuda=SimpleNamespace(is_available=lambda: False),
+                backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+            )
+            monkeypatch.setattr(_accel, 'torch', fake_torch)
         result = detect_backend('auto')
         assert result in ('torch', 'torch_gpu'), (
             f"With torch available but no numba, expected 'torch' or 'torch_gpu', "

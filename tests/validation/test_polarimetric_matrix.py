@@ -36,7 +36,7 @@ import pytest
 import numpy as np
 
 try:
-    from grdl.image_processing.decomposition import (
+    from grdl_sar.decomposition import (
         CovarianceMatrix,
         CoherencyMatrix,
         StokesVector,

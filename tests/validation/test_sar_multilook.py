@@ -37,13 +37,13 @@ except ImportError:
     _HAS_SICD = False
 
 try:
-    from grdl.image_processing.sar import MultilookDecomposition
+    from grdl_sar import MultilookDecomposition
     _HAS_MULTILOOK = True
 except ImportError:
     _HAS_MULTILOOK = False
 
 try:
-    from grdl.image_processing.sar import CSIProcessor
+    from grdl_sar import CSIProcessor
     _HAS_CSI = True
 except ImportError:
     _HAS_CSI = False

@@ -177,15 +177,17 @@ def run_filter_benchmarks(
     List[BenchmarkRecord]
     """
     from grdl.image_processing.filters import (
-        ComplexLeeFilter,
         GaussianFilter,
-        LeeFilter,
         MaxFilter,
         MeanFilter,
         MedianFilter,
         MinFilter,
-        PhaseGradientFilter,
         StdDevFilter,
+    )
+    from grdl_sar.filters import (
+        ComplexLeeFilter,
+        LeeFilter,
+        PhaseGradientFilter,
     )
 
     _section("Image Processing — Filters")
@@ -327,7 +329,7 @@ def run_decomposition_benchmarks(
     tags: Dict[str, str],
 ) -> List:
     """Benchmark polarimetric decomposition."""
-    from grdl.image_processing.decomposition import PauliDecomposition
+    from grdl_sar.decomposition import PauliDecomposition
 
     _section("Image Processing — Decomposition")
     sz = tags["array_size"]
@@ -356,7 +358,7 @@ def run_decomposition_benchmarks(
 
     # --- DualPolHAlpha ---
     try:
-        from grdl.image_processing.decomposition import DualPolHAlpha
+        from grdl_sar.decomposition import DualPolHAlpha
 
         rng = np.random.default_rng(42)
         co_pol = (
@@ -432,7 +434,7 @@ def run_detection_benchmarks(
 
     # --- CA-CFAR ---
     try:
-        from grdl.image_processing.detection.cfar import CACFARDetector
+        from grdl_sar.detection.cfar import CACFARDetector
 
         for pfa in (1e-3, 1e-4):
             det = CACFARDetector(guard_cells=3, training_cells=12, pfa=pfa)
@@ -446,7 +448,7 @@ def run_detection_benchmarks(
 
     # --- GO-CFAR ---
     try:
-        from grdl.image_processing.detection.cfar import GOCFARDetector
+        from grdl_sar.detection.cfar import GOCFARDetector
 
         det = GOCFARDetector(guard_cells=3, training_cells=12, pfa=1e-3)
         r = _bench(f"GOCFARDetector.detect.{sz}", det.detect,
@@ -458,7 +460,7 @@ def run_detection_benchmarks(
 
     # --- SO-CFAR ---
     try:
-        from grdl.image_processing.detection.cfar import SOCFARDetector
+        from grdl_sar.detection.cfar import SOCFARDetector
 
         det = SOCFARDetector(guard_cells=3, training_cells=12, pfa=1e-3)
         r = _bench(f"SOCFARDetector.detect.{sz}", det.detect,
@@ -470,7 +472,7 @@ def run_detection_benchmarks(
 
     # --- OS-CFAR ---
     try:
-        from grdl.image_processing.detection.cfar import OSCFARDetector
+        from grdl_sar.detection.cfar import OSCFARDetector
 
         det = OSCFARDetector(guard_cells=3, training_cells=12, pfa=1e-3)
         r = _bench(f"OSCFARDetector.detect.{sz}", det.detect,
@@ -1902,7 +1904,7 @@ def run_sar_processing_benchmarks(
 
     try:
         from grdl.IO.sar import SICDReader
-        from grdl.image_processing.sar import SublookDecomposition
+        from grdl_sar import SublookDecomposition
 
         with SICDReader(sar_path) as reader:
             metadata = reader.metadata
@@ -1951,7 +1953,7 @@ def run_sar_processing_benchmarks(
 
     # --- MultilookDecomposition ---
     try:
-        from grdl.image_processing.sar import MultilookDecomposition
+        from grdl_sar import MultilookDecomposition
 
         if sar_path:
             from grdl.IO.sar import SICDReader as _SICDReader2
@@ -1985,7 +1987,7 @@ def run_sar_processing_benchmarks(
 
     # --- CSIProcessor ---
     try:
-        from grdl.image_processing.sar import CSIProcessor
+        from grdl_sar import CSIProcessor
 
         if sar_path:
             from grdl.IO.sar import SICDReader as _SICDReader3
@@ -2178,7 +2180,7 @@ def run_image_formation_benchmarks(
 
     try:
         from grdl.IO.sar import CPHDReader
-        from grdl.image_processing.sar import (
+        from grdl_sar import (
             CollectionGeometry, PolarGrid, PolarFormatAlgorithm,
             SubaperturePartitioner,
         )
@@ -2229,7 +2231,7 @@ def run_image_formation_benchmarks(
 
         # RDA (may not be compatible with all data)
         try:
-            from grdl.image_processing.sar import RangeDopplerAlgorithm
+            from grdl_sar import RangeDopplerAlgorithm
 
             r = _bench("RangeDopplerAlgorithm.form_image.real_data",
                         lambda _p, geometry, _m=metadata: (
@@ -2244,7 +2246,7 @@ def run_image_formation_benchmarks(
 
         # StripmapPFA
         try:
-            from grdl.image_processing.sar import StripmapPFA
+            from grdl_sar import StripmapPFA
 
             r = _bench("StripmapPFA.form_image.real_data",
                         lambda _p, geometry, _m=metadata: (
@@ -2259,7 +2261,7 @@ def run_image_formation_benchmarks(
 
         # FastBackProjection
         try:
-            from grdl.image_processing.sar import FastBackProjection
+            from grdl_sar import FastBackProjection
 
             r = _bench("FastBackProjection.form_image.real_data",
                         lambda _p, geometry, _m=metadata: (

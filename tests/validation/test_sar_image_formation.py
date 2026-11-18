@@ -51,43 +51,43 @@ except ImportError:
     _HAS_SUBAP_META = False
 
 try:
-    from grdl.image_processing.sar import CollectionGeometry
+    from grdl_sar import CollectionGeometry
     _HAS_GEOM = True
 except ImportError:
     _HAS_GEOM = False
 
 try:
-    from grdl.image_processing.sar import PolarGrid
+    from grdl_sar import PolarGrid
     _HAS_GRID = True
 except ImportError:
     _HAS_GRID = False
 
 try:
-    from grdl.image_processing.sar import PolarFormatAlgorithm
+    from grdl_sar import PolarFormatAlgorithm
     _HAS_PFA = True
 except ImportError:
     _HAS_PFA = False
 
 try:
-    from grdl.image_processing.sar import SubaperturePartitioner
+    from grdl_sar import SubaperturePartitioner
     _HAS_SUBAP = True
 except ImportError:
     _HAS_SUBAP = False
 
 try:
-    from grdl.image_processing.sar import RangeDopplerAlgorithm
+    from grdl_sar import RangeDopplerAlgorithm
     _HAS_RDA = True
 except ImportError:
     _HAS_RDA = False
 
 try:
-    from grdl.image_processing.sar import StripmapPFA
+    from grdl_sar import StripmapPFA
     _HAS_SPFA = True
 except ImportError:
     _HAS_SPFA = False
 
 try:
-    from grdl.image_processing.sar import FastBackProjection
+    from grdl_sar import FastBackProjection
     _HAS_FBP = True
 except ImportError:
     _HAS_FBP = False

@@ -203,8 +203,8 @@ class TestNumpyWriterLevel2:
 # PngWriter Level 1
 # ===================================================================
 
-@pytest.mark.skipif(not _HAS_PNG_WRITER,
-                    reason="grdl PngWriter not available")
+@pytest.mark.skipif(not _HAS_PNG_WRITER or not _HAS_PIL,
+                    reason="grdl PngWriter or Pillow (PIL) not available")
 class TestPngWriterLevel1:
     """Validate PngWriter file creation and error handling."""
 

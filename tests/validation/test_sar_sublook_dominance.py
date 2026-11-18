@@ -38,7 +38,7 @@ import pytest
 import numpy as np
 
 try:
-    from grdl.image_processing.sar.sublook import SublookDecomposition
+    from grdl_sar.subaperture.sublook import SublookDecomposition
     _HAS_SUBLOOK = True
 except ImportError:
     _HAS_SUBLOOK = False
@@ -50,7 +50,7 @@ except ImportError:
     _HAS_SICD = False
 
 try:
-    from grdl.image_processing.sar.dominance import (
+    from grdl_sar.subaperture.dominance import (
         DominanceFeatures,
         compute_dominance,
         compute_sublook_entropy,
